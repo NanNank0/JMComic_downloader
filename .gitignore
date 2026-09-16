@@ -1,0 +1,26 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 打包产物 —— exe 通过 Releases 分发，不进仓库
+build/
+dist/
+*.spec
+
+# 本地配置与密钥 —— 绝对不要提交
+option.yml
+option.local.yml
+.env
+
+# 下载内容（本工具会主动写入这些文件）
+downloads/
+*.pdf
+*.zip
+*.png
+!assets/**/*.png
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

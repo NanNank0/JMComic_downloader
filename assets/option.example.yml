@@ -1,0 +1,65 @@
+# Starter jmcomic option file.
+#
+# Every key here is optional: jmcomic has defaults and this file only overrides them.
+# Generate the full baseline with:  python scripts/jmctl.py config --write option.yml
+#
+# Pass it explicitly:   python scripts/jmctl.py info 438696 --option ./option.yml
+# or export it once:    JM_OPTION_PATH=/abs/path/option.yml
+
+# Show download progress in the log. Safe to keep true: jmctl.py routes all
+# jmcomic logging to stderr, so stdout stays valid JSON.
+log: true
+
+client:
+  # api  = mobile API (default). Tolerates IP/region filtering better.
+  # html = web frontend. Faster, and the only impl that supports --sub-category.
+  impl: api
+  retry_times: 5
+
+  postman:
+    meta_data:
+      # system = use the OS proxy settings. Other useful values:
+      #   null                    -> no proxy
+      #   127.0.0.1:7890          -> single proxy for both schemes
+      #   {http: ..., https: ...} -> per-scheme
+      proxies: system
+
+      # Only needed for login-gated albums. The cookie is DOMAIN-SCOPED: a value
+      # taken from one JM domain does nothing on another. The AVS cookie is enough.
+      # Prefer the ${ENV_VAR} form so no secret is stored in this file.
+      # cookies:
+      #   AVS: ${JM_AVS_COOKIE}
+
+download:
+  # Reuse images already on disk instead of downloading them again. Keep true:
+  # it is what makes re-running a partially failed download cheap.
+  cache: true
+
+  image:
+    # JM serves scrambled images; true restores them.
+    decode: true
+    # Convert every page to this format, e.g. .jpg. null keeps the original.
+    suffix: null
+
+  threading:
+    # Concurrent images. Bigger is faster and heavier on the site; the web
+    # frontend serves at most 50 images per request, so stay at or below 50.
+    image: 30
+    # Concurrent chapters. Defaults to the CPU thread count when omitted.
+    photo: 16
+
+dir_rule:
+  # Where albums are written. Relative paths resolve against the working
+  # directory, so prefer an absolute path when the caller's cwd is unpredictable.
+  base_dir: ./downloads
+
+  # Path template.
+  #   Bd      = base_dir
+  #   A<field>= album field (Aid, Atitle, Aauthor, ...)
+  #   P<field>= chapter field (Pid, Ptitle, Pindex, Pname, ...)
+  # 'Bd / Ptitle' is the site-like default; 'Bd / Aid / Ptitle' groups by album.
+  rule: Bd / Aid / Ptitle
+
+  # Optional Chinese simplification: null (default), zh-cn, or zh-tw.
+  # Requires the optional `zhconv` package and degrades gracefully without it.
+  normalize_zh: null
