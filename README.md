@@ -1,4 +1,4 @@
-# JMComic 下载器 · jmcomic-skill
+# JMComic 下载器 · JMComic_downloader
 
 把 [JMComic-Crawler-Python](https://github.com/hect0x7/JMComic-Crawler-Python)（`jmcomic`）包装成**三种好用的形态**：一个能直接双击运行的 Windows 窗口程序、一个给 AI Agent 用的 skill、一个返回 JSON 的命令行工具。三者共用同一套下载引擎和配置。
 
@@ -28,7 +28,7 @@
 
 ### 方式一：双击 exe（推荐给普通用户）
 
-从 [Releases](https://github.com/NanNank0/jmcomic-skill/releases/latest) 下载 `jmcomic-downloader.exe`。它是一个独立文件，**不需要装 Python，也不需要装 jmcomic**——运行所需的一切都已经打包进去了。
+从 [Releases](https://github.com/NanNank0/JMComic_downloader/releases/latest) 下载 `jmcomic-downloader.exe`。它是一个独立文件，**不需要装 Python，也不需要装 jmcomic**——运行所需的一切都已经打包进去了。
 
 1. 双击 `jmcomic-downloader.exe`
 2. 在「车号 / 链接」里输入号码，例如 `438696`
