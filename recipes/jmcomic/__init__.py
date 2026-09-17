@@ -34,7 +34,12 @@ class JmcomicRecipe(PythonRecipe):
     version = None  # None -> resolve the newest release from PyPI
     url = None
     site_packages_name = "jmcomic"
-    depends = ["python3", "commonx", "pillow", "pycryptodome", "pyyaml", "requests"]
+    # `pyyaml` is intentionally absent, even though jmcomic declares it. It is a C
+    # extension with no pure-Python and no android_* wheel, so listing it here (or in
+    # buildozer.spec) makes p4a's resolver fail with "Auto module resolution failed".
+    # jmcomic only imports yaml lazily, on YAML-option-file code paths this app does
+    # not use - see the comment in buildozer.spec and tests/test_android_requirements.py.
+    depends = ["python3", "commonx", "pillow", "pycryptodome", "requests"]
 
     # jmcomic is pure Python, so installing it for the host first is unnecessary
     # and only risks pulling curl-cffi in on the host side.

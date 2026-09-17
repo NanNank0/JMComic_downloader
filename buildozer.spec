@@ -43,7 +43,22 @@ version = 1.0.0
 # correctly through `requests`.
 #
 # pyjnius is required by the webview bootstrap's Java layer (PythonActivity).
-requirements = python3,pyjnius,requests,commonx,pillow,pycryptodome,pyyaml,jmcomic
+#
+# pyyaml is deliberately ABSENT. It is a C extension: 72 wheels on PyPI, none of them
+# pure-Python, and no android_* wheel, so p4a's resolver (`--only-binary=:all:`) cannot
+# satisfy it and aborts the whole build with the very unhelpful
+# "[WARNING]: Auto module resolution failed". p4a has no pyyaml recipe either.
+#
+# Dropping it is safe here because PyYAML is only ever imported lazily, and only on
+# code paths this app never takes (verified by reading the sources):
+#   common/base/packer.py  -> inside YmlPacker methods (YAML option files)
+#   jmcomic/jm_option.py   -> inside a legacy `zip: level:` migration advice function
+# The Android UI builds its option from JmOption.default() and never loads a YAML file.
+# `python gui/build_android.py` and tests/test_android_requirements.py guard this rule.
+# If YAML ever becomes genuinely required on Android, add a recipes/pyyaml/ that builds
+# PyYAML's pure-Python fallback (its setup.py skips the C extension when libyaml is
+# absent), or switch the call sites to ruamel.yaml, for which p4a HAS a recipe.
+requirements = python3,pyjnius,requests,commonx,pillow,pycryptodome,jmcomic
 
 p4a.bootstrap = webview
 

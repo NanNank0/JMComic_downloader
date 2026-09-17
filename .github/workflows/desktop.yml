@@ -76,6 +76,20 @@ jobs:
           print('doctor JSON OK:', data['platform'], data['httpBackend'])
           PY
 
+      # These two encode Android build rules that cost several broken CI runs to
+      # discover. Both are fast (no Android toolchain) and run on every push.
+      - name: Android requirements must be resolvable by python-for-android
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python tests/test_android_requirements.py
+
+      - name: App must work with PyYAML unavailable
+        # Android omits pyyaml (C extension, no pure/Android wheel, no p4a recipe).
+        # This blocks the import and performs a real download to prove that is safe.
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python tests/test_no_yaml.py
+
   linux:
     name: linux bundle
     runs-on: ubuntu-22.04

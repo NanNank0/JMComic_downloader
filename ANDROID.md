@@ -283,20 +283,68 @@ buildozer 的 `_install_p4a` 会读 `app.p4a.branch`，并在缓存的 clone 分
 
 ```
 [WARNING]: Auto module resolution failed:
-...
-# Command failed: python -m pythonforandroid.toolchain create ... --debug
 ```
 
-这看起来是**依赖解析**问题（某个 requirement 找不到对应 recipe 或版本）。
-CI 里的诊断步骤现在会把该报错后 25 行提取成注解，下一次运行就能看到具体是哪个包。
-最可能的嫌疑是 `commonx`（纯 Python，理论上可以直接 pip 装）或我们自己的 `jmcomic` recipe。
+这**不是** recipe 写错，而是 p4a 的依赖解析机制。读 p4a 的 `build.py` 可以看到：对每个
+**没有 recipe** 的 requirement，它会跑
 
-**建议下一步**：在 WSL2 里本地构建，可以直接看到完整输出并即时调整：
+```
+pip install <包> --dry-run --only-binary=:all: --platform=android_24_arm64_v8a ...
+```
+
+`--only-binary=:all:` 要求**只用 wheel**。纯 Python wheel（`*-py3-none-any.whl`）能匹配
+任意平台标签，所以没问题；而**只有平台专属 wheel 的 C 扩展**（例如 `pyyaml`）既没有
+`android_*` wheel，也没有纯 Python wheel，这一步必然失败——报错却只有一句
+`Auto module resolution failed`，完全看不出是哪个包。
+
+**`pyyaml` 就是元凶**：PyPI 上 72 个 wheel，**没有一个是纯 Python 的**，p4a 也没有它的 recipe。
+
+#### 为什么可以直接去掉 pyyaml
+
+PyYAML 在这个项目里**只被惰性 import，而且只在本 App 不会走的代码路径上**（已读源码确认）：
+
+| 位置 | 语境 |
+|---|---|
+| `common/base/packer.py:63/67/75/80` | 都在 `YmlPacker` 的方法内部 —— 只有读写 YAML option 文件才会用到 |
+| `jmcomic/jm_option.py:353` | 在 `_migrate_zip_level` 内部嵌套的 `log_advice()` 里 —— 只有配置里残留旧的 `zip: level:` 才会触发 |
+
+Android 界面只做「输入车号 → 下载」，它用 `JmOption.default()` 构造配置，
+**从不读取 YAML 文件**，所以这两条路径都不会进入。
+
+于是 `buildozer.spec` 的 requirements 和 `recipes/jmcomic` 的 `depends` 里都删掉了 `pyyaml`。
+
+#### 这条规则现在有测试守着
+
+两个测试直接编码了上面的结论，都在普通 CI（无需 Android 工具链）里跑：
+
+| 测试 | 作用 |
+|---|---|
+| `tests/test_android_requirements.py` | 遍历 buildozer.spec 的 requirements 与 recipe 的 depends，要求每个包**要么有 p4a recipe，要么有纯 Python wheel**；否则失败并给出修法。它会明确点出 `pyyaml` 这类包 |
+| `tests/test_no_yaml.py` | 用 import hook **屏蔽 `yaml`**，然后跑一次真实下载，证明省略 pyyaml 是安全的 |
+
+`test_android_requirements.py` 在修复前会失败并报出：
+
+```
+FAIL  pyyaml   pyyaml 6.0.3: 72 wheels but none pure-Python (no android_* wheel exists either)
+```
+
+`test_no_yaml.py` 在屏蔽 yaml 的情况下完成了一次真实下载：
+
+```
+yaml is blocked (simulating Android)
+jmcomic 2.7.7 imported without yaml
+download OK: images=16 files=16
+NO-YAML TEST: PASS
+```
+
+**如果以后真的需要在 Android 上用 YAML**，两个办法：写一个 `recipes/pyyaml/`（PyYAML 的
+`setup.py` 在找不到 libyaml 时会退化为纯 Python 实现），或者把调用点换成 `ruamel.yaml`
+——p4a **有** `ruamel.yaml` 的 recipe。
+
+**建议下一步**：如果这次改完仍有问题，在 WSL2 里本地构建最快：
 
 ```bash
-# 见「二、构建方法 / 方法 1」安装依赖后
 python gui/build_android.py debug        # 失败时 bin/ 下没有 apk，控制台有完整日志
-# 或直接跑 p4a 看细节
 buildozer -v android debug 2>&1 | tail -n 120
 ```
 
