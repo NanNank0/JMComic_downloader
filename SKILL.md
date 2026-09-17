@@ -10,7 +10,9 @@ metadata:
 # JMComic via `jmctl.py`
 
 This skill drives **JMComic-Crawler-Python** (`jmcomic`) through one wrapper script that
-converts the library into a stable JSON contract.
+converts the library into a stable JSON contract. The same engine (`scripts/jmcore.py`)
+also backs a graphical app shipped for Windows / Linux / macOS / Android, so anything you
+can do here the user can also do by clicking.
 
 ## The one rule
 

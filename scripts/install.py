@@ -33,8 +33,10 @@ SKILL_NAME = "jmcomic"
 # This file lives in <skill>/scripts/, so the bundle root is its parent.
 SOURCE_DIR = Path(__file__).resolve().parent.parent
 
-# Files that belong in a shipped skill bundle.
-INCLUDE = ("SKILL.md", "scripts", "assets", "README.md")
+# Files that belong in a shipped skill bundle. The repo's README/ANDROID/PACKAGING
+# docs stay at the project root: a skill only needs its definition, the scripts, and
+# the config template.
+INCLUDE = ("SKILL.md", "scripts", "assets")
 
 ROOTS = {
     "agents": lambda home: home / ".agents" / "skills",

@@ -2,10 +2,23 @@
 __pycache__/
 *.py[cod]
 
-# 打包产物 —— exe 通过 Releases 分发，不进仓库
+# 虚拟环境
+.venv/
+.venv-*/
+venv/
+
+# 桌面打包产物 —— 二进制通过 Releases 分发，不进仓库
 build/
 dist/
 *.spec
+
+# Android / buildozer 产物
+bin/
+.buildozer/
+.p4a/
+*.apk
+*.aab
+*.keystore
 
 # 本地配置与密钥 —— 绝对不要提交
 option.yml

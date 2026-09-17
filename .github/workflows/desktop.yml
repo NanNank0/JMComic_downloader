@@ -1,0 +1,151 @@
+name: desktop
+
+# Builds Linux and macOS bundles. Neither can be produced from Windows:
+# PyInstaller cannot cross-compile, and Kivy needs a POSIX host for the native parts.
+# Windows is built locally (python gui/build.py) or by the release workflow.
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'gui/**'
+      - 'scripts/**'
+      - '.github/workflows/desktop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  smoke:
+    name: import + CLI smoke test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install jmcomic requests img2pdf pillow
+          python -m pip install "kivy[base]"
+
+      - name: Byte-compile everything
+        run: python -m compileall -q gui scripts
+
+      - name: Engine imports without a GUI toolkit or a terminal
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, 'scripts')
+          import jmcore
+          assert 'tkinter' not in sys.modules, 'engine must not pull in tkinter'
+          print('jmcore OK; android =', jmcore.is_android())
+          print('default http backend =', jmcore.default_http_backend())
+          PY
+
+      - name: CLI still satisfies its JSON contract
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python scripts/jmctl.py doctor --no-network > out.json 2>/dev/null
+          python - <<'PY'
+          import json
+          data = json.load(open('out.json', encoding='utf-8'))
+          assert data['status'] == 'ok', data
+          assert data['schemaVersion'] == 1
+          print('doctor JSON OK:', data['platform'], data['httpBackend'])
+          PY
+
+      - name: GUI module imports under Kivy
+        env:
+          KIVY_NO_ARGS: '1'
+          KIVY_NO_CONSOLELOG: '1'
+          SDL_VIDEODRIVER: dummy
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, 'gui')
+          sys.path.insert(0, 'scripts')
+          import kivy_app
+          print('kivy_app imports OK')
+          PY
+
+  linux:
+    name: linux bundle
+    runs-on: ubuntu-22.04
+    needs: smoke
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglib2.0-0 libgstreamer1.0-0 libmtdev1 \
+            libsdl2-2.0-0 libsdl2-image-2.0-0 libsdl2-mixer-2.0-0 libsdl2-ttf-2.0-0
+          python -m pip install --upgrade pip
+          python -m pip install jmcomic requests img2pdf pillow pyinstaller
+          python -m pip install "kivy[base]"
+
+      - name: Build
+        run: python gui/build.py --onedir --console
+
+      - name: Run the bundle's selftest
+        # Downloads one chapter, so it also proves HTTP + image decoding work inside
+        # the frozen bundle. Allowed to fail so the artifact still uploads; the log
+        # above shows the reason.
+        continue-on-error: true
+        run: |
+          ./dist/jmcomic-downloader/jmcomic-downloader --selftest 438696
+
+      - name: Upload Linux bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: jmcomic-linux
+          path: dist/jmcomic-downloader/
+          if-no-files-found: error
+
+  macos:
+    name: macos app
+    runs-on: macos-14
+    needs: smoke
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install jmcomic requests img2pdf pillow pyinstaller
+          python -m pip install "kivy[base]"
+
+      - name: Build .app
+        run: python gui/build.py --onedir --console
+
+      - name: Zip the bundle
+        run: |
+          cd dist
+          zip -qry jmcomic-macos.zip jmcomic-downloader.app
+          ls -lh
+
+      - name: Upload macOS bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: jmcomic-macos
+          path: dist/jmcomic-macos.zip
+          if-no-files-found: error
+
+      - name: Attach macOS build to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/jmcomic-macos.zip
+          fail_on_unmatched_files: false
