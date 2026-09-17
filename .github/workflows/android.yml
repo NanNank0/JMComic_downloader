@@ -51,6 +51,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install buildozer cython==0.29.36
+          # buildozer may pull a stale python-for-android whose code does
+          #   from pip._internal.exceptions import BuildDependencyInstallError
+          # That name is gone from modern pip, and p4a *upgrades pip inside its own
+          # build venv*, so the build dies with:
+          #   ImportError: cannot import name 'BuildDependencyInstallError'
+          # Fixed upstream; verified that 2026.5.9 no longer references it.
+          python -m pip install --upgrade "python-for-android==2026.5.9"
+          python - <<'PY'
+          import os, pythonforandroid
+          print('p4a', getattr(pythonforandroid, '__version__', '?'),
+                'at', os.path.dirname(pythonforandroid.__file__))
+          PY
 
       # ndk / sdk / p4a downloads are the slow part; caching them turns a ~60 min
       # cold build into a few minutes.
