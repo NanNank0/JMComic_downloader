@@ -80,6 +80,17 @@ jobs:
           key: buildozer-project-${{ hashFiles('buildozer.spec', 'recipes/**') }}
           restore-keys: buildozer-project-
 
+      # `buildozer android debug` lets Gradle sign with ~/.android/debug.keystore.
+      # A fresh runner generates a NEW random key, so APKs from different runs have
+      # different signatures and cannot be installed over one another
+      # (INSTALL_FAILED_UPDATE_INCOMPATIBLE). Caching the keystore keeps debug builds
+      # upgradeable. Use a static key: the point is persistence, not invalidation.
+      - name: Cache Android debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android
+          key: android-debug-keystore-v1
+
       - name: Stage shared engine into webui/
         run: |
           set -x

@@ -19,7 +19,7 @@ package.domain = io.github.nannank0
 source.dir = webui
 source.include_exts = py,png,jpg,ttf
 
-version = 1.0.0
+version = 1.1.0
 
 # THE KEY SETTING: no Kivy.
 #

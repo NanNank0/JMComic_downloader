@@ -84,12 +84,68 @@ def parse_recipe_depends() -> list:
     return [item.strip().strip("'\"") for item in match.group(1).split(",") if item.strip()]
 
 
+def check_webview_entrypoint() -> list:
+    """
+    The webview bootstrap must ship a `main.py` in its source directory.
+
+    p4a does NOT enforce this for the webview bootstrap - its build script skips the
+    main.py check with the comment "(webview doesn't need an entrypoint, apparently)"
+    - but PythonActivity still launches `main.py` at runtime. Without the file the APK
+    installs and launches fine and then shows the loading page forever, because the
+    Java side loops pinging localhost:5000 that nothing ever binds.
+
+    Returns a list of problems (empty when fine).
+    """
+    problems = []
+
+    spec_text = SPEC.read_text(encoding="utf-8")
+    source_match = re.search(r"^source\.dir\s*=\s*(\S+)", spec_text, re.MULTILINE)
+    if not source_match:
+        problems.append("buildozer.spec has no `source.dir`, so the app directory is unknown")
+        return problems
+
+    source_dir = PROJECT_ROOT / source_match.group(1).strip()
+    if not source_dir.is_dir():
+        problems.append(f"source.dir {source_match.group(1)!r} does not exist")
+        return problems
+
+    entry = source_dir / "main.py"
+    if not entry.is_file():
+        problems.append(
+            f"{source_dir.name}/main.py is missing - the webview bootstrap will build "
+            f"an APK whose WebView waits forever on localhost:5000")
+
+    boot = re.search(r"^p4a\.bootstrap\s*=\s*(\S+)", spec_text, re.MULTILINE)
+    if boot and boot.group(1).strip() == "webview":
+        if entry.is_file():
+            text = entry.read_text(encoding="utf-8")
+            # The port is baked into the generated Java; they must agree.
+            if "5000" not in text:
+                problems.append(
+                    "webui/main.py does not reference port 5000, which is the port "
+                    "p4a's webview bootstrap pings by default")
+
+    return problems
+
+
 def main() -> int:
     requirements = parse_requirements()
     depends = parse_recipe_depends()
 
     print(f"buildozer.spec requirements : {requirements}")
     print(f"recipes/jmcomic depends     : {depends}")
+
+    entry_problems = check_webview_entrypoint()
+    if entry_problems:
+        print()
+        print("WEBVIEW ENTRYPOINT: FAIL")
+        for problem in entry_problems:
+            print(f"  - {problem}")
+        print()
+        print("webview bootstrap 不会在构建时检查 main.py，但运行时 PythonActivity 会启动它；")
+        print("缺少它的话 APK 能装能开，WebView 会永远停在加载页。")
+        return 1
+    print("webview entrypoint          : OK (main.py 存在)")
 
     packages = []
     for name in requirements + depends:

@@ -261,7 +261,7 @@ adb logcat -s python:D          # 看 Python 侧输出
 
 **如果下载失败**，在界面里确认「HTTP 后端」显示 `requests`；再不行就配置代理。
 
-### 整条链路踩过并修好的 5 个障碍
+### 整条链路踩过并修好的 6 个障碍
 
 | # | 现象 | 根因 | 修法 |
 |---|---|---|---|
@@ -270,16 +270,61 @@ adb logcat -s python:D          # 看 Python 侧输出
 | 3 | `Auto module resolution failed` | p4a 对没有 recipe 的包跑 `pip install --only-binary=:all: --platform=android_*`；`pyyaml` 是 C 扩展，72 个 wheel 无一是纯 Python，也没有 `android_*` wheel | 从 requirements 与 recipe depends 中移除 pyyaml（其 import 全是惰性的、且在本 App 不走的路径上） |
 | 4 | 构建配置本身 | 界面从 Kivy 换成网页后，Android 侧要用 p4a 的 `webview` bootstrap，而不是 sdl2/kivy | `buildozer.spec` 设 `p4a.bootstrap = webview`，requirements 去掉 kivy、加上 pyjnius |
 | 5 | 端口与 token | WebView 加载的是固定地址 `http://127.0.0.1:5000/`，**没有 query string**，token 无法放 URL 里 | Android 上固定用 5000 端口；token 由服务端**注入页面**（`__TOKEN__` 占位符），API 请求仍带 token |
+| 6 | **APK 能装能开，但界面一直转圈加载** | `webui/` 里只有 `server.py`，**没有 `main.py`**。p4a 的 webview bootstrap 在**构建时跳过** `main.py` 检查（源码注释原文："webview doesn't need an entrypoint, apparently"），但运行时 `PythonActivity` 仍会启动 `main.py` —— 于是没有任何代码去监听 5000 端口 | 新增 `webui/main.py` 作为 Android 入口，绑定 5000 端口并把启动信息打到 logcat |
 
-其中第 3 条现在有测试守着：`tests/test_android_requirements.py` 会直接复刻 p4a 的 pip 解析，
-修复前它精确报出
+#### 症状：装了能开，但界面一直加载（第 6 条）
+
+p4a 生成的 Java 侧是**无限重试**，所以服务起不来时界面就永远停在加载页，而不是报错：
+
+```java
+// WebViewLoader.java（由 p4a 依据 --port 生成）
+public static void testConnection() {
+    while (true) {
+        if (WebViewLoader.pingHost("localhost", 5000, 100)) {
+            PythonActivity.mActivity.loadUrl("http://127.0.0.1:5000/");
+            break;
+        } else {
+            Log.v(TAG, "Could not ping localhost:5000");
+            Thread.sleep(100);
+        }
+    }
+}
+```
+
+在设备上确认（对着**已经装上的** APK 也能验证这个判断）：
+
+```bash
+adb logcat -s WebViewLoader:V python:D
+```
+
+- **反复出现** `Could not ping localhost:5000`，且**完全没有** `[jmcomic] main.py starting`
+  → 就是本问题：`main.py` 没进 APK 或被启动。
+- 出现了 python traceback → `main.py` 跑了但启动失败，按报错修。
+
+`webui/main.py` 会往 logcat 打这些行：
 
 ```
-ERROR: Could not find a version that satisfies the requirement pyyaml (from versions: none)
+[jmcomic] main.py starting
+[jmcomic] app dir: /data/user/0/io.github.nannank0.jmcomicdownloader/files/app
+[jmcomic] files: ['jmcore.py', 'main.py', 'server.py', 'ui.py']
+[jmcomic] android=True backend=requests
+[jmcomic] default download dir: /data/user/0/.../files/downloads
+```
+
+`files:` 那行特别有用——能直接证明 `jmcore.py` 有没有被暂存进 APK。
+
+第 3 条和第 6 条现在都有测试守着：`tests/test_android_requirements.py` 既复刻 p4a 的 pip 解析，
+也检查 `source.dir` 下 `main.py` 是否存在、是否引用 5000 端口。缺文件时报：
+
+```
+WEBVIEW ENTRYPOINT: FAIL
+  - webui/main.py is missing - the webview bootstrap will build an APK whose WebView
+    waits forever on localhost:5000
 ```
 
 `tests/test_no_yaml.py` 则用 import hook 屏蔽 `yaml` 后跑一次真实下载，证明省略它是安全的。
 两个测试都接在普通 CI 的 smoke job 里，几秒钟就能跑完，不需要 Android 工具链。
+
 ---
 
 ## 附录：两个值得记住的内部细节
