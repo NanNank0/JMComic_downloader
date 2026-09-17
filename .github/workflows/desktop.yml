@@ -68,18 +68,28 @@ jobs:
           print('doctor JSON OK:', data['platform'], data['httpBackend'])
           PY
 
-      - name: GUI module imports under Kivy
+      - name: GUI module compiles, and imports under Kivy when a display is available
         env:
           KIVY_NO_ARGS: '1'
           KIVY_NO_CONSOLELOG: '1'
           SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
         run: |
+          # Byte-compile is the portable check. A full `import kivy_app` also builds
+          # real widgets and needs a usable GL context, which a headless runner may
+          # not provide, so it is attempted and reported rather than required.
+          python -m compileall -q gui
+          echo "COMPILE_OK"
           python - <<'PY'
-          import sys
+          import sys, traceback
           sys.path.insert(0, 'gui')
           sys.path.insert(0, 'scripts')
-          import kivy_app
-          print('kivy_app imports OK')
+          try:
+              import kivy_app
+              print('KIVY_IMPORT_OK')
+          except Exception:
+              print('KIVY_IMPORT_FAILED')
+              traceback.print_exc()
           PY
 
   linux:

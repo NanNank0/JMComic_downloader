@@ -69,7 +69,14 @@ jobs:
           restore-keys: buildozer-project-
 
       - name: Stage shared engine into gui/
-        run: python gui/build_android.py prepare
+        run: |
+          set -x
+          python -V
+          ls -la
+          python -m compileall -q gui scripts
+          python gui/build_android.py prepare
+          echo "STAGING_OK"
+          ls -la gui/
 
       - name: Build APK (debug)
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_type == 'debug' }}
