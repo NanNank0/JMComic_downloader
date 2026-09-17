@@ -10,7 +10,9 @@ venv/
 # 桌面打包产物 —— 二进制通过 Releases 分发，不进仓库
 build/
 dist/
-*.spec
+# Only PyInstaller's generated spec at the repo root. The bare `*.spec` pattern
+# would also swallow buildozer.spec, which IS required in the repo.
+/*.spec
 
 # Android / buildozer 产物
 bin/
