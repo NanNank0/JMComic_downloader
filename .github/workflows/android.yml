@@ -201,10 +201,17 @@ jobs:
             exit 0
           fi
           echo "inspecting $LOG ($(wc -l < "$LOG") lines)"
-          # Recipe failures are the usual cause; grab those plus tracebacks.
-          grep -nE "Traceback \(most recent call last\)|Error|error:|Exception|failed|BUILD FAILED|not found|No such file" "$LOG" \
-            | grep -viE "^\s*[0-9]+:\s*(INFO|DEBUG)" | tail -n 14 > p4a_diag.txt 2>&1 || true
-          echo "::error title=p4a error::$(tr '\n' ' | ' < p4a_diag.txt | cut -c1-1100)"
+          # Recipe / dependency-resolution failures are the usual cause; grab those
+          # plus tracebacks, with a little context around the first real error.
+          grep -nE "Auto module resolution failed|ERROR:|BUILD FAILED|No matching distribution|Could not find a version|ModuleNotFoundError|ImportError|recipe .*(failed|error)|Exception:" "$LOG" \
+            | tail -n 10 > p4a_diag.txt 2>&1 || true
+          # Then the lines immediately after the first real error, which usually name
+          # the offending package.
+          FIRST=$(head -1 p4a_diag.txt | cut -d: -f1)
+          if [ -n "$FIRST" ]; then
+            sed -n "$((FIRST)),$((FIRST+25))p" "$LOG" | sed 's/\x1b\[[0-9;]*m//g' >> p4a_diag.txt
+          fi
+          echo "::error title=p4a error::$(tr '\n' ' | ' < p4a_diag.txt | cut -c1-1400)"
           echo "===== last 50 lines ====="
           tail -n 50 "$LOG"
 

@@ -220,50 +220,84 @@ WebView 加载的是固定地址 `http://127.0.0.1:5000/`，**没有 query strin
 | `jmcore` 无 GUI 依赖 | ✅ **已实测** |
 | p4a recipe 类 API 与基类匹配 | ✅ **已核对源码**（`PythonRecipe`、`_host_recipe.pip`、`ctx.get_python_install_dir`） |
 | p4a `webview` bootstrap 的端口约定 | ✅ **已核对源码**（默认 5000，加载 `http://127.0.0.1:PORT/`） |
-| CI 的 staging 步骤 | ✅ CI 已通过 |
-| **APK 实际构建成功** | ❌ **未成功** |
+| Android SDK / build-tools 就位 | ✅ **CI 已验证**（`build-tools: 34.0.0 37.0.0`，`platforms: android-34`） |
+| p4a 的 pip 不兼容已解决 | ✅ **CI 已验证**（`BuildDependencyInstallError` 报错消失） |
+| **APK 实际构建成功** | ❌ **仍未成功** —— 当前卡在 `Auto module resolution failed` |
 | **APK 在真机运行** | ❌ **未实测** |
 
-### CI 卡在哪，以及怎么修
+### 已经解决的两个 Android 构建障碍
 
-`buildozer android debug` 报：
+**① SDK 里没有 build-tools**
+
+报错：
 
 ```
 # build-tools folder not found .../android-sdk/build-tools
 # Aidl not found, please install it.
 ```
 
-根因已经定位到（读 buildozer 源码确认）：
+两个原因叠加：
 
-```python
-# buildozer/targets/android.py, _install_android_packages()
-cache_key = 'android:sdk_installation'
-cache_value = [self.android_api, self.android_minapi, ...]
-if self.buildozer.state.get(cache_key, None) == cache_value:
-    return True          # ← 直接跳过，build-tools 永远不会被安装
+- buildozer 装的是 2021 年的 cmdline-tools（`commandlinetools-linux-6514223`），
+  它的 `sdkmanager` 依赖 Java 11 起被移除的 JAXB 类，**在 JDK 17 下直接失效**，
+  于是什么都装不上。修法：CI 预装当前版 cmdline-tools，并按 buildozer 期望的旧布局
+  建 `tools/bin/sdkmanager` 符号链接（见 `android.py` 的 `sdkmanager_path`）。
+- buildozer 会在状态匹配时**直接跳过** SDK 安装：
+
+  ```python
+  cache_key = 'android:sdk_installation'
+  if self.buildozer.state.get(cache_key, None) == cache_value:
+      return True          # ← build-tools 永远不会被安装
+  ```
+
+  而 CI 缓存了 `.buildozer`，把「已安装」的状态一起还原了。修法：构建前删除
+  `.buildozer/state.db`。
+
+**② p4a 与新版 pip 不兼容**
+
+报错：
+
+```
+ImportError: cannot import name 'BuildDependencyInstallError' from 'pip._internal.exceptions'
+  (.../build/venv/lib/python3.14/site-packages/pip/...)
 ```
 
-而 CI **缓存了 `.buildozer` 目录**，于是把「SDK 已安装」这个状态一起恢复了，
-但里面的 build-tools 其实是缺的 → 安装被永久跳过 → 每次都在同一处失败。
+p4a 的代码 `from pip._internal.exceptions import BuildDependencyInstallError`，
+而该名字已被新版 pip 移除；p4a 又会在自己的构建 venv 里执行 `pip install -U pip`，
+所以必然崩在 import 上。
 
-workflow 里的修法是**删掉状态文件**，强制重新检查 SDK 组件：
+注意：**升级 pip 安装的 p4a 没用**——buildozer 实际运行的是它自己 git clone 到
+`.buildozer/android/platform/python-for-android` 的那份副本（默认 `master`），
+而该副本会被项目缓存还原。正确修法是在 `buildozer.spec` 里加：
 
-```yaml
-- name: Clear stale buildozer SDK state
-  run: rm -f .buildozer/state.db
+```ini
+p4a.branch = develop
 ```
 
-（`state.db` 是 buildozer 的 `JsonStore`，路径见 `buildozer/__init__.py`。）
+buildozer 的 `_install_p4a` 会读 `app.p4a.branch`，并在缓存的 clone 分支与配置不一致时
+重新 clone/checkout。已核对 develop 源码不再引用该名字。
 
-### 建议：在 WSL2 里本地构建
+### 当前卡在哪
 
-CI 的 SDK 环境不好调试。本地能看到实时输出，缺组件直接补：
+`buildozer android debug` 现在能跑完 SDK 阶段和 p4a 启动，但在 `p4a create` 阶段失败：
+
+```
+[WARNING]: Auto module resolution failed:
+...
+# Command failed: python -m pythonforandroid.toolchain create ... --debug
+```
+
+这看起来是**依赖解析**问题（某个 requirement 找不到对应 recipe 或版本）。
+CI 里的诊断步骤现在会把该报错后 25 行提取成注解，下一次运行就能看到具体是哪个包。
+最可能的嫌疑是 `commonx`（纯 Python，理论上可以直接 pip 装）或我们自己的 `jmcomic` recipe。
+
+**建议下一步**：在 WSL2 里本地构建，可以直接看到完整输出并即时调整：
 
 ```bash
-SDK=$HOME/.buildozer/android/platform/android-sdk
-find "$SDK" -name sdkmanager -type f          # 找到真实路径
-"$SDKMGR" "build-tools;34.0.0" "platforms;android-34" "platform-tools"
-buildozer android debug
+# 见「二、构建方法 / 方法 1」安装依赖后
+python gui/build_android.py debug        # 失败时 bin/ 下没有 apk，控制台有完整日志
+# 或直接跑 p4a 看细节
+buildozer -v android debug 2>&1 | tail -n 120
 ```
 
 第一次构建要 30–60 分钟（下载 NDK 并编译 Python），之后就快了。
