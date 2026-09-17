@@ -92,7 +92,14 @@ jobs:
           python -m pip install jmcomic requests img2pdf pillow pyinstaller
 
       - name: Build
-        run: python gui/build.py --onedir --console
+        # --console keeps the URL visible in the job log. On Linux that does NOT change
+        # the artifact shape (a plain folder either way).
+        run: |
+          set -o pipefail
+          if ! python gui/build.py --onedir --console 2>&1 | tee build.log; then
+            echo "::error title=linux build failed::$(grep -v 'TRACE:' build.log | grep -iE 'error|exception|not found|cannot|died' | tail -n 4 | tr '\n' ' | ')"
+            exit 1
+          fi
 
       - name: Verify the frozen bundle serves the UI and downloads
         # Real end-to-end check of the packaged binary: starts it, drives the HTTP API,
@@ -125,7 +132,17 @@ jobs:
           python -m pip install jmcomic requests img2pdf pillow pyinstaller
 
       - name: Build .app
-        run: python gui/build.py --onedir --console
+        # No --console here: PyInstaller only produces a .app bundle with --windowed,
+        # and the .app is what users need. The verification step below does not need a
+        # console because it reads the URL from --url-file.
+        run: |
+          set -o pipefail
+          if ! python gui/build.py --onedir 2>&1 | tee build.log; then
+            echo "::error title=macos build failed::$(grep -v 'TRACE:' build.log | grep -iE 'error|exception|not found|cannot|died' | tail -n 4 | tr '\n' ' | ')"
+            exit 1
+          fi
+          test -x "dist/jmcomic-downloader.app/Contents/MacOS/jmcomic-downloader" \
+            || { echo "::error title=macos bundle malformed::no executable inside the .app"; exit 1; }
 
       - name: Verify the frozen bundle serves the UI and downloads
         continue-on-error: true

@@ -155,8 +155,15 @@ def build_args(args) -> list:
     return cmd
 
 
-def expected_target(onedir: bool) -> Path:
-    if sys.platform == "darwin":
+def expected_target(onedir: bool, windowed: bool) -> Path:
+    """
+    Where PyInstaller will put the artifact.
+
+    macOS only produces a `.app` bundle when `--windowed` is used; with `--console` it
+    produces a plain directory/binary instead. Getting this wrong makes a successful
+    build look like a failure ("reported success but ... is missing").
+    """
+    if sys.platform == "darwin" and windowed:
         return PROJECT_ROOT / "dist" / f"{APP_NAME}.app"
     if sys.platform == "win32":
         if onedir:
@@ -165,6 +172,15 @@ def expected_target(onedir: bool) -> Path:
     if onedir:
         return PROJECT_ROOT / "dist" / APP_NAME / APP_NAME
     return PROJECT_ROOT / "dist" / APP_NAME
+
+
+def frozen_binary(target: Path) -> Path:
+    """The executable inside a bundle, for running --selftest."""
+    if target.suffix == ".app":
+        return target / "Contents" / "MacOS" / APP_NAME
+    if target.is_dir():
+        return target / APP_NAME
+    return target
 
 
 def main(argv=None) -> int:
@@ -195,10 +211,6 @@ def main(argv=None) -> int:
     print(f"platform: {sys.platform} ({platform.machine()})")
     print(f"python:   {sys.executable} ({platform.python_version()})")
 
-    if sys.version_info >= (3, 14):
-        print("\nWARNING: Kivy has no build for Python 3.14+. Use 3.12 or 3.13.",
-              file=sys.stderr)
-
     check_environment()
 
     if args.clean:
@@ -216,13 +228,15 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return result.returncode
 
-    target = expected_target(args.onedir or sys.platform == "darwin")
+    windowed = not args.console
+    target = expected_target(args.onedir or (sys.platform == "darwin" and windowed),
+                             windowed)
     if not target.exists():
         print(f"\nPyInstaller reported success but {project_relative(target)} is missing.",
               file=sys.stderr)
         return 1
 
-    if target.is_dir():
+    if target.is_dir() or target.suffix == ".app":
         print(f"\nBuilt: {project_relative(target)} (bundle)")
     else:
         size_mb = target.stat().st_size / (1024 * 1024)
@@ -235,12 +249,7 @@ def main(argv=None) -> int:
         print("\nLinux: see PACKAGING.md for AppImage / .deb packaging.")
 
     if args.verify:
-        binary = target
-        if target.is_dir():
-            if sys.platform == "darwin":
-                binary = target / "Contents" / "MacOS" / APP_NAME
-            else:
-                binary = target / APP_NAME
+        binary = frozen_binary(target)
         print(f"\nRunning selftest ({args.verify_id})…")
         check = subprocess.run([str(binary), "--selftest", args.verify_id],
                                cwd=str(PROJECT_ROOT))

@@ -126,6 +126,26 @@ jobs:
           tail -n 200 .buildozer/android/platform/build-*/build.log 2>/dev/null || \
             echo "(no build.log found)"
 
+      # "build-tools folder not found" / "Aidl not found" only says the SDK is
+      # incomplete; this reports what is ACTUALLY on disk and whether sdkmanager can
+      # be found at all, as a readable annotation.
+      - name: Diagnose the Android SDK layout
+        if: failure()
+        run: |
+          SDK="$HOME/.buildozer/android/platform/android-sdk"
+          {
+            echo "SDK=$SDK exists=$([ -d "$SDK" ] && echo yes || echo no)"
+            echo "top: $(ls "$SDK" 2>/dev/null | tr '\n' ' ')"
+            echo "build-tools: $(ls "$SDK/build-tools" 2>/dev/null | tr '\n' ' ')"
+            echo "platforms: $(ls "$SDK/platforms" 2>/dev/null | tr '\n' ' ')"
+            SM=$(find "$HOME/.buildozer" -name sdkmanager -type f 2>/dev/null | head -1)
+            echo "sdkmanager=$SM"
+            if [ -n "$SM" ]; then
+              echo "available build-tools: $(yes | "$SM" --list 2>/dev/null | grep -o 'build-tools;[0-9.]*' | sort -u | tr '\n' ' ')"
+            fi
+          } > diag.txt 2>&1
+          echo "::error title=android sdk state::$(tr '\n' ' | ' < diag.txt | cut -c1-900)"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
