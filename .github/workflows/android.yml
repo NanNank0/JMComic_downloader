@@ -173,23 +173,28 @@ jobs:
           } > diag.txt 2>&1
           echo "::error title=android sdk state::$(tr '\n' ' | ' < diag.txt | cut -c1-500)"
 
-      # p4a's real error is in its own build.log, which is far too long to print. Pull
-      # out the interesting part so the failure is readable from the API.
+      # p4a's real error is buried in thousands of lines. The Build step above already
+      # tee'd the entire output to apk-build.log, so mine that instead of hunting for
+      # p4a's own log (which may not exist when p4a exits early).
       - name: Diagnose the python-for-android build
         if: failure()
         run: |
-          LOG=$(ls .buildozer/android/platform/build-*/build.log 2>/dev/null | head -1)
-          if [ -z "$LOG" ]; then
-            echo "::error title=p4a::no build.log found"
+          echo "logs present: $(find .buildozer -name '*.log' 2>/dev/null | head -5 | tr '\n' ' ')"
+          LOG=apk-build.log
+          if [ ! -f "$LOG" ]; then
+            LOG=$(find .buildozer -name 'build.log' 2>/dev/null | head -1)
+          fi
+          if [ -z "$LOG" ] || [ ! -f "$LOG" ]; then
+            echo "::error title=p4a::no log to inspect"
             exit 0
           fi
-          # Prefer python tracebacks / explicit errors over the thousands of INFO lines.
-          {
-            grep -nE "Traceback \(most recent call last\)|^[A-Za-z_.]*Error|Exception:|recipe .* (failed|error)|ERROR:" "$LOG" | tail -n 12
-          } > p4a_diag.txt 2>&1
+          echo "inspecting $LOG ($(wc -l < "$LOG") lines)"
+          # Recipe failures are the usual cause; grab those plus tracebacks.
+          grep -nE "Traceback \(most recent call last\)|Error|error:|Exception|failed|BUILD FAILED|not found|No such file" "$LOG" \
+            | grep -viE "^\s*[0-9]+:\s*(INFO|DEBUG)" | tail -n 14 > p4a_diag.txt 2>&1 || true
           echo "::error title=p4a error::$(tr '\n' ' | ' < p4a_diag.txt | cut -c1-1100)"
-          echo "===== last 40 lines of the p4a log ====="
-          tail -n 40 "$LOG"
+          echo "===== last 50 lines ====="
+          tail -n 50 "$LOG"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
