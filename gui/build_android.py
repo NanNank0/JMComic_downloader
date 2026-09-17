@@ -32,10 +32,12 @@ from pathlib import Path
 os.environ.setdefault("KIVY_NO_ARGS", "1")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-GUI_DIR = PROJECT_ROOT / "gui"
+# buildozer.spec sets source.dir to this directory, so the shared engine has to be
+# staged inside it before python-for-android collects the sources.
+SOURCE_DIR = PROJECT_ROOT / "webui"
 SPEC = PROJECT_ROOT / "buildozer.spec"
 
-# Files staged into gui/ so the APK contains them, then removed again.
+# Files staged into webui/ so the APK contains them, then removed again.
 STAGED = ("jmcore.py",)
 
 
@@ -44,16 +46,16 @@ def stage() -> None:
         source = PROJECT_ROOT / "scripts" / name
         if not source.is_file():
             raise SystemExit(f"missing {source}")
-        shutil.copy2(source, GUI_DIR / name)
-        print(f"staged  gui/{name}  <- scripts/{name}")
+        shutil.copy2(source, SOURCE_DIR / name)
+        print(f"staged  webui/{name}  <- scripts/{name}")
 
 
 def unstage() -> None:
     for name in STAGED:
-        target = GUI_DIR / name
+        target = SOURCE_DIR / name
         if target.exists():
             target.unlink()
-            print(f"removed gui/{name}")
+            print(f"removed webui/{name}")
 
 
 def require_tool(name: str) -> None:

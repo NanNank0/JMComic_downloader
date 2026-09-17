@@ -68,49 +68,39 @@ jobs:
           key: buildozer-project-${{ hashFiles('buildozer.spec', 'recipes/**') }}
           restore-keys: buildozer-project-
 
-      - name: Stage shared engine into gui/
+      - name: Stage shared engine into webui/
         run: |
           set -x
           python -V
           ls -la
-          python -m compileall -q gui scripts
+          python -m compileall -q gui scripts webui
           python gui/build_android.py prepare
           echo "STAGING_OK"
-          ls -la gui/
+          ls -la webui/
 
-      # buildozer ships a bare SDK whose build-tools are missing, producing
-      # "build-tools folder not found" / "Aidl not found". `buildozer android debug
-      # --sdk` stops after fetching the SDK, then sdkmanager installs the exact
-      # components python-for-android needs. The SDK location varies between
-      # buildozer versions, so both known paths are probed.
-      - name: Ensure Android SDK build-tools
+      # The `.buildozer` cache restores buildozer's recorded install state along with
+      # the (possibly incomplete) SDK. buildozer short-circuits its installer on a
+      # state match:
+      #
+      #     cache_key = 'android:sdk_installation'
+      #     if self.buildozer.state.get(cache_key, None) == cache_value:
+      #         return True          # <- never installs build-tools
+      #
+      # so once a run recorded "SDK installed" without build-tools, every later run
+      # skips them and fails with "build-tools folder not found" / "Aidl not found".
+      # Deleting state.db forces the installer to run again while keeping the cache.
+      - name: Clear stale buildozer SDK state
         run: |
-          buildozer android debug --sdk || true
-          SDKMGR=""
-          for cand in \
-              "$HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin/sdkmanager" \
-              "$HOME/.buildozer/android/platform/android-sdk/tools/bin/sdkmanager" \
-              "$HOME/.buildozer/android/platform/android-sdk/cmdline-tools/bin/sdkmanager"; do
-            if [ -x "$cand" ]; then SDKMGR="$cand"; break; fi
-          done
-          if [ -z "$SDKMGR" ]; then
-            echo "::warning::sdkmanager not found; searching"
-            find "$HOME/.buildozer" -name sdkmanager -type f 2>/dev/null | head -5 || true
-            exit 0
-          fi
-          echo "using $SDKMGR"
-          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
-          yes | "$SDKMGR" "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
-          SDK="${SDKMGR%%/cmdline-tools*}"
-          SDK="${SDK%%/tools*}"
-          ls -la "$SDK/build-tools" 2>/dev/null || echo "::warning::build-tools still absent"
+          ls -la .buildozer 2>/dev/null || echo "(.buildozer not restored)"
+          rm -f .buildozer/state.db
+          echo "cleared .buildozer/state.db so SDK components are re-checked"
 
       - name: Build APK (debug)
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_type == 'debug' }}
         run: |
           set -o pipefail
           if ! buildozer android debug 2>&1 | tee apk-build.log; then
-            echo "::error title=apk build failed::$(grep -iE 'error|exception|no module|not found|cannot|failed' apk-build.log | tail -n 3 | tr '\n' ' | ')"
+            echo "::error title=apk build failed::$(grep -v 'TRACE:' apk-build.log | grep -iE 'error|exception|not found|cannot|failed|died' | tail -n 4 | tr '\n' ' | ')"
             exit 1
           fi
 

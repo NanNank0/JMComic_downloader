@@ -1,6 +1,10 @@
 # Android 构建说明
 
-Android 版用 **Kivy + Buildozer（python-for-android）** 打包。这篇文章记录了一个**必须知道的运行时约束**，以及怎么构建。
+Android 版用 **Buildozer（python-for-android）** 打包，使用 p4a 的 **`webview` bootstrap**：
+Android 侧只是一个装着 WebView 的 Activity，Python 在本地 5000 端口跑我们的网页界面。
+
+**因为界面是网页，Android 版不需要 Kivy，也不需要 SDL2。** 少了一整套 native 图形栈，
+构建要处理的原生依赖显著变少。
 
 ---
 
@@ -60,7 +64,6 @@ def default_http_backend() -> str:
 每次升级 `jmcomic` 后，请验证这一点：
 
 ```bash
-# 在构建环境里（不需要 Android）
 python -c "
 import jmcomic  # 不应报 curl_cffi 缺失
 print('版本', jmcomic.__version__)
@@ -71,11 +74,9 @@ print('默认 postman:', jmcomic.JmModuleConfig.DEFAULT_OPTION_DICT['client']['p
 如果报 `ModuleNotFoundError: No module named 'curl_cffi'`，说明上游改了导入位置，此时需要：
 给 `curl_cffi` 写一个 p4a recipe（用 `libcurl` + `openssl` recipe，两个都有），或者锁定一个更早的 `jmcomic` 版本。
 
-**构建产物上如何验证**：装好 APK 后跑一次「单章下载」，然后在 logcat 里确认没有 `curl_cffi` 相关报错：
+**运行期如何验证**：装好 APK 后跑一次「单章下载」，然后在 logcat 里确认没有 `curl_cffi` 相关报错：
 
 ```bash
-buildozer android deploy run logcat
-# 或者
 adb logcat -s python:D
 ```
 
@@ -167,13 +168,31 @@ base64 -w0 release.keystore    # 复制输出
 
 | 配置 | 值 | 原因 |
 |---|---|---|
-| `source.dir` | `gui` | 只打包 GUI 目录，减小 APK |
-| `requirements` | 手动列出 | 见第一节，绕开 curl-cffi |
+| `source.dir` | `webui` | 只打包网页界面目录，减小 APK |
+| `p4a.bootstrap` | `webview` | **关键**：用 WebView 承载界面，因此不需要 Kivy/SDL2 |
+| `requirements` | 手动列出 | 见第一节，绕开 curl-cffi；含 `pyjnius`（webview bootstrap 的 Java 层需要） |
 | `p4a.local_recipes` | `recipes` | 启用我们的 jmcomic recipe |
 | `android.archs` | `arm64-v8a, armeabi-v7a` | 覆盖现代手机与旧设备 |
 | `android.minapi` | `24` | Android 7.0+，兼顾覆盖面 |
 | `android.wakelock` | `True` | 屏幕熄灭时不让下载中断 |
 | `android.permissions` | `INTERNET` + 网络/存储 | 下载和保存文件所需 |
+
+### 端口是写死的 5000
+
+p4a 的 webview bootstrap 会 ping `localhost:5000`，然后加载 `http://127.0.0.1:5000/`
+（见 p4a 的 `bootstraps/webview/build/templates/WebViewLoader.tmpl.java`，以及
+`bootstraps/common/build/build.py` 里 `--port` 的默认值 `'5000'`）。
+
+所以 `webui/server.py` 在 Android 上会**强制使用 5000 端口**，并且不打开外部浏览器
+（界面就在自己的 WebView 里）。如果 5000 被占用会直接报错退出，而不是悄悄换端口——
+换端口的话 WebView 就找不到服务了。
+
+### token 为什么放在页面里而不是 URL 里
+
+WebView 加载的是固定地址 `http://127.0.0.1:5000/`，**没有 query string**，所以 token
+不能在 URL 里传递。服务端在返回 HTML 时把 token 注入到页面脚本中
+（`INDEX_HTML` 里的 `__TOKEN__` 占位符），API 请求仍然带 token。
+这样既不破坏 Android 的加载方式，也仍然阻止本机其他程序盲发请求驱动这个下载器。
 
 ---
 
@@ -186,7 +205,7 @@ base64 -w0 release.keystore    # 复制输出
 | App 启动即闪退 | 用 `adb logcat -s python:D` 看 Python 报错。最常见是缺依赖或 `jmcore` 没打包进去 |
 | 构建卡在下载 SDK/NDK | 正常，首次要很久。CI 里有缓存 |
 | `buildozer` 报 Java 版本错 | 需要 **JDK 17**，不是 8 也不是 21 |
-| APK 装了但下载失败 | 检查是否走了 `curl_cffi` 后端。Kivy 界面里「HTTP 后端」应显示 `requests` |
+| APK 装了但下载失败 | 检查是否走了 `curl_cffi` 后端。网页界面里「HTTP 后端」应显示 `requests` |
 
 ---
 
@@ -197,28 +216,48 @@ base64 -w0 release.keystore    # 复制输出
 | 项目 | 状态 |
 |---|---|
 | `requests` 后端能完整下载 | ✅ **已实测**（Windows，16 张图） |
-| Kivy 界面与控制逻辑 | ✅ **已实测**（Windows，含端到端下载与跨线程回调） |
+| 网页界面与控制逻辑 | ✅ **已实测**（本地服务 + API + SSE 端到端） |
 | `jmcore` 无 GUI 依赖 | ✅ **已实测** |
 | p4a recipe 类 API 与基类匹配 | ✅ **已核对源码**（`PythonRecipe`、`_host_recipe.pip`、`ctx.get_python_install_dir`） |
-| CI 的 staging 步骤（把 jmcore 放进 gui/） | ✅ CI 已通过 |
-| **APK 实际构建成功** | ❌ **未成功** —— CI 在 SDK build-tools 处失败 |
+| p4a `webview` bootstrap 的端口约定 | ✅ **已核对源码**（默认 5000，加载 `http://127.0.0.1:PORT/`） |
+| CI 的 staging 步骤 | ✅ CI 已通过 |
+| **APK 实际构建成功** | ❌ **未成功** |
 | **APK 在真机运行** | ❌ **未实测** |
 
-### CI 目前卡在哪
+### CI 卡在哪，以及怎么修
 
-`.github/workflows/android.yml` 已经能跑通依赖安装、staging、SDK 拉取，
-但在真正编译 APK 时报：
+`buildozer android debug` 报：
 
 ```
 # build-tools folder not found .../android-sdk/build-tools
 # Aidl not found, please install it.
 ```
 
-buildozer 下载的 SDK 里缺 build-tools。workflow 里已经加了用 sdkmanager 补装
-`build-tools;34.0.0` 的步骤，但 sdkmanager 的实际路径随 buildozer 版本变化，探测没命中。
+根因已经定位到（读 buildozer 源码确认）：
 
-**所以现在最可靠的路径是在 WSL2 里本地构建**（方法 1）。本地能看到实时输出，
-补装 SDK 组件也很直接：
+```python
+# buildozer/targets/android.py, _install_android_packages()
+cache_key = 'android:sdk_installation'
+cache_value = [self.android_api, self.android_minapi, ...]
+if self.buildozer.state.get(cache_key, None) == cache_value:
+    return True          # ← 直接跳过，build-tools 永远不会被安装
+```
+
+而 CI **缓存了 `.buildozer` 目录**，于是把「SDK 已安装」这个状态一起恢复了，
+但里面的 build-tools 其实是缺的 → 安装被永久跳过 → 每次都在同一处失败。
+
+workflow 里的修法是**删掉状态文件**，强制重新检查 SDK 组件：
+
+```yaml
+- name: Clear stale buildozer SDK state
+  run: rm -f .buildozer/state.db
+```
+
+（`state.db` 是 buildozer 的 `JsonStore`，路径见 `buildozer/__init__.py`。）
+
+### 建议：在 WSL2 里本地构建
+
+CI 的 SDK 环境不好调试。本地能看到实时输出，缺组件直接补：
 
 ```bash
 SDK=$HOME/.buildozer/android/platform/android-sdk

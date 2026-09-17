@@ -1,15 +1,19 @@
 name: desktop
 
 # Builds Linux and macOS bundles. Neither can be produced from Windows:
-# PyInstaller cannot cross-compile, and Kivy needs a POSIX host for the native parts.
-# Windows is built locally (python gui/build.py) or by the release workflow.
+# PyInstaller cannot cross-compile.
+#
+# There is no GUI toolkit in this project any more (the UI is a local web page), so
+# these jobs need no SDL/OpenGL/xvfb and no Kivy - which is exactly what used to make
+# the macOS job fail.
 on:
   push:
     tags: ['v*']
   pull_request:
     paths:
-      - 'gui/**'
+      - 'webui/**'
       - 'scripts/**'
+      - 'gui/**'
       - '.github/workflows/desktop.yml'
   workflow_dispatch:
 
@@ -26,33 +30,37 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install system libraries for Kivy
-        # `import kivy_app` → `import kivy` → SDL2/OpenGL. Without these the import
-        # step below fails with a library load error on a bare runner.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libgl1 libglib2.0-0 libgstreamer1.0-0 libmtdev1 \
-            libsdl2-2.0-0 libsdl2-image-2.0-0 libsdl2-mixer-2.0-0 libsdl2-ttf-2.0-0
-
       - name: Install dependencies
+        # Deliberately no Kivy: nothing in this project imports a GUI toolkit.
         run: |
           python -m pip install --upgrade pip
           python -m pip install jmcomic requests img2pdf pillow
-          python -m pip install "kivy[base]"
 
       - name: Byte-compile everything
-        run: python -m compileall -q gui scripts
+        run: python -m compileall -q gui scripts webui
 
-      - name: Engine imports without a GUI toolkit or a terminal
+      - name: Engine imports without any GUI toolkit or terminal
         run: |
           python - <<'PY'
           import sys
           sys.path.insert(0, 'scripts')
           import jmcore
-          assert 'tkinter' not in sys.modules, 'engine must not pull in tkinter'
+          for forbidden in ('tkinter', 'kivy'):
+              assert forbidden not in sys.modules, f'engine must not pull in {forbidden}'
           print('jmcore OK; android =', jmcore.is_android())
           print('default http backend =', jmcore.default_http_backend())
+          PY
+
+      - name: Web UI imports and carries its embedded page
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, 'webui')
+          sys.path.insert(0, 'scripts')
+          import server
+          assert '__TOKEN__' in server.INDEX_HTML, 'page must keep the token placeholder'
+          assert len(server.INDEX_HTML) > 1000
+          print('webui OK; page bytes =', len(server.INDEX_HTML))
           PY
 
       - name: CLI still satisfies its JSON contract
@@ -68,34 +76,6 @@ jobs:
           print('doctor JSON OK:', data['platform'], data['httpBackend'])
           PY
 
-      - name: GUI module compiles, and imports under Kivy when a display is available
-        # Byte-compiling gui/ is the portable, non-fatal check on the GUI module: it
-        # catches syntax and import-name errors everywhere. A full `import kivy_app`
-        # additionally builds real widgets (Window, fonts, GL shaders), which a
-        # headless runner cannot always provide, so that part is reported but allowed
-        # to fail. The authoritative GUI check is the packaged `--selftest` in the
-        # linux/macos jobs below, which runs a real download end to end.
-        continue-on-error: true
-        env:
-          KIVY_NO_ARGS: '1'
-          KIVY_NO_CONSOLELOG: '1'
-          SDL_VIDEODRIVER: dummy
-          SDL_AUDIODRIVER: dummy
-        run: |
-          python -m compileall -q gui
-          echo "COMPILE_OK"
-          python - <<'PY'
-          import sys, traceback
-          sys.path.insert(0, 'gui')
-          sys.path.insert(0, 'scripts')
-          try:
-              import kivy_app
-              print('KIVY_IMPORT_OK')
-          except Exception:
-              print('KIVY_IMPORT_FAILED (headless GL is a common cause; informational only)')
-              traceback.print_exc()
-          PY
-
   linux:
     name: linux bundle
     runs-on: ubuntu-22.04
@@ -108,38 +88,19 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libgl1 libglib2.0-0 libgstreamer1.0-0 libmtdev1 xvfb \
-            libsdl2-2.0-0 libsdl2-image-2.0-0 libsdl2-mixer-2.0-0 libsdl2-ttf-2.0-0
           python -m pip install --upgrade pip
           python -m pip install jmcomic requests img2pdf pillow pyinstaller
-          python -m pip install "kivy[base]"
 
       - name: Build
-        # xvfb-run gives PyInstaller's isolated analysis a virtual display, which is
-        # what analysing kivy.core.window needs on a headless runner. SDL dummy
-        # drivers cover the paths that still probe a device directly.
-        env:
-          SDL_VIDEODRIVER: dummy
-          SDL_AUDIODRIVER: dummy
-          KIVY_NO_ARGS: '1'
-          KIVY_NO_CONSOLELOG: '1'
-        run: |
-          set -o pipefail
-          if ! xvfb-run -a python gui/build.py --onedir --console 2>&1 | tee build.log; then
-            echo "::error title=linux build failed::$(grep -iE 'error|exception|no module|not found|cannot' build.log | tail -n 3 | tr '\n' ' | ')"
-            exit 1
-          fi
+        run: python gui/build.py --onedir --console
 
-      - name: Run the bundle's selftest
-        # Downloads one chapter, so it also proves HTTP + image decoding work inside
-        # the frozen bundle. Allowed to fail so the artifact still uploads; the log
-        # above shows the reason. Invoke the built binary directly - passing --verify
-        # back to build.py would trigger a second full build.
+      - name: Verify the frozen bundle serves the UI and downloads
+        # Real end-to-end check of the packaged binary: starts it, drives the HTTP API,
+        # and downloads one chapter with PDF export.
         continue-on-error: true
-        run: |
-          ./dist/jmcomic-downloader/jmcomic-downloader --selftest 438696
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python tests/test_frozen.py dist/jmcomic-downloader/jmcomic-downloader
 
       - name: Upload Linux bundle
         uses: actions/upload-artifact@v4
@@ -162,23 +123,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install jmcomic requests img2pdf pillow pyinstaller
-          python -m pip install "kivy[base]"
 
       - name: Build .app
-        # Same headless-analysis hazard as Linux: PyInstaller's isolated child imports
-        # kivy.core.window, and a runner without a display kills it (which surfaces as
-        # "No module named 'pyimod02_importers'"). Dummy SDL drivers avoid the probe.
+        run: python gui/build.py --onedir --console
+
+      - name: Verify the frozen bundle serves the UI and downloads
+        continue-on-error: true
         env:
-          SDL_VIDEODRIVER: dummy
-          SDL_AUDIODRIVER: dummy
-          KIVY_NO_ARGS: '1'
-          KIVY_NO_CONSOLELOG: '1'
-        run: |
-          set -o pipefail
-          if ! python gui/build.py --onedir --console 2>&1 | tee build.log; then
-            echo "::error title=macos build failed::$(grep -iE 'error|exception|no module|not found|cannot' build.log | tail -n 3 | tr '\n' ' | ')"
-            exit 1
-          fi
+          PYTHONIOENCODING: utf-8
+        run: python tests/test_frozen.py "dist/jmcomic-downloader.app/Contents/MacOS/jmcomic-downloader"
 
       - name: Zip the bundle
         run: |

@@ -2,13 +2,14 @@
 """
 Package the JMComic downloader for the current platform.
 
-The GUI is `gui/kivy_app.py` (Kivy), shared by every platform. This script wraps
-PyInstaller for desktop targets; Android is built with buildozer instead, which
-only runs on Linux/macOS.
+The application is `webui/server.py`: a local web UI served on 127.0.0.1, opened in
+the user's browser. There is deliberately NO native GUI toolkit, because Kivy/SDL2 was
+what made frozen desktop builds fail and macOS CI fragile. With no GUI toolkit,
+freezing is just Python plus jmcomic.
 
     python gui/build.py                     # this platform
     python gui/build.py --onedir            # folder instead of one file (faster start)
-    python gui/build.py --console           # keep a console for diagnosing a bad build
+    python gui/build.py --console           # keep a console (needed to see the URL)
     python gui/build.py --verify            # build, then run the bundle's --selftest
     python gui/build.py --icon app.ico      # custom icon (--icon app.icns on macOS)
     python gui/build.py --android           # print the Android build instructions
@@ -19,8 +20,7 @@ Platform notes
 * Linux    -> dist/jmcomic-downloader      (AppImage/.deb live in PACKAGING.md)
 * macOS    -> dist/jmcomic-downloader.app  (.dmg needs hdiutil, see PACKAGING.md)
 
-A macOS build must be produced ON macOS: PyInstaller cannot cross-compile, and an
-unsigned .app is blocked by Gatekeeper until the user allows it.
+A macOS build must be produced ON macOS: PyInstaller cannot cross-compile.
 """
 
 from __future__ import annotations
@@ -33,15 +33,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-# This script imports Kivy to check that it is installed. Kivy parses sys.argv when
-# it is imported, and this script's own switches (--console, --onedir, ...) mean
-# nothing to Kivy, so it would print its usage and exit with status 2 - which looks
-# exactly like a failed build. Set this before ANY kivy import.
+# This script does not import Kivy, but keep the guard for the case where a user still
+# has it installed and a stray import would make Kivy parse this script's argv.
 os.environ.setdefault("KIVY_NO_ARGS", "1")
-os.environ.setdefault("KIVY_NO_CONSOLELOG", "1")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-ENTRY = PROJECT_ROOT / "gui" / "kivy_app.py"
+ENTRY = PROJECT_ROOT / "webui" / "server.py"
 APP_NAME = "jmcomic-downloader"
 
 
@@ -61,15 +58,17 @@ def check_environment() -> None:
             f'Install it with:  "{sys.executable}" -m pip install pyinstaller'
         )
     try:
-        import kivy  # noqa: F401
+        import jmcomic  # noqa: F401
     except ImportError:
         raise SystemExit(
-            "Kivy is not installed, but the GUI requires it.\n"
-            f'Install it with:  "{sys.executable}" -m pip install "kivy[base]" jmcomic'
+            "jmcomic is not installed, but the bundle must contain it.\n"
+            f'Install it with:  "{sys.executable}" -m pip install jmcomic'
         )
 
     missing = []
-    for path, why in ((PROJECT_ROOT / "scripts" / "jmcore.py", "shared engine"),
+    for path, why in ((PROJECT_ROOT / "webui" / "server.py", "web UI server"),
+                      (PROJECT_ROOT / "webui" / "ui.py", "embedded UI"),
+                      (PROJECT_ROOT / "scripts" / "jmcore.py", "shared engine"),
                       (PROJECT_ROOT / "scripts" / "jmctl.py", "CLI")):
         if not path.is_file():
             missing.append(f"{project_relative(path)} ({why})")
@@ -91,8 +90,8 @@ support. Use one of:
             python3-pip python3-venv autoconf libtool pkg-config zlib1g-dev \\
             libncurses-dev cmake libffi-dev libssl-dev
        python3 -m venv .venv && . .venv/bin/activate
-       pip install buildozer cython
-       buildozer android debug          # -> bin/*.apk
+       pip install buildozer cython==0.29.36
+       python gui/build_android.py debug     # -> bin/*.apk
 
   2. GitHub Actions:  .github/workflows/android.yml  (push a tag, or run manually)
 
@@ -102,31 +101,6 @@ Configuration lives in buildozer.spec; the curl-cffi workaround lives in
 recipes/jmcomic/. Read ANDROID.md before building - it documents the one runtime
 invariant the app depends on.
 """
-
-
-def kivy_deps_args() -> list:
-    """
-    `--collect-all` flags for whichever Kivy platform dependency packages exist.
-
-    Kivy keeps its SDL2 / GLEW / ANGLE binaries in separate distributions rather than
-    inside the kivy package, so a build that only collects `kivy` can fail to start
-    with a missing-DLL/so error. The set differs per platform (Windows has angle and
-    glew; Linux/macOS have neither), so probe instead of hardcoding.
-    """
-    import importlib.util
-
-    args = []
-    for name in ("kivy_deps.sdl2", "kivy_deps.glew", "kivy_deps.angle",
-                 "kivy_deps.sdl2_dev"):
-        try:
-            # find_spec raises (not returns None) when the PARENT package is absent,
-            # e.g. on Linux/macOS where there is no kivy_deps at all.
-            found = importlib.util.find_spec(name) is not None
-        except (ImportError, ModuleNotFoundError, ValueError):
-            found = False
-        if found:
-            args += ["--collect-all", name]
-    return args
 
 
 def build_args(args) -> list:
@@ -149,40 +123,27 @@ def build_args(args) -> list:
         "--distpath", str(PROJECT_ROOT / "dist"),
         "--workpath", str(PROJECT_ROOT / "build"),
         "--specpath", str(PROJECT_ROOT / "build"),
-        # kivy_app.py imports jmcore from ../scripts; static analysis cannot see it.
+        # server.py imports jmcore (../scripts) and ui (same dir); ui is a normal
+        # import so only the sibling scripts dir needs adding to the search path.
         "--paths", str(PROJECT_ROOT / "scripts"),
         "--hidden-import", "jmcore",
-        # Do NOT pass --collect-all kivy. PyInstaller already ships hook-kivy.py, which
-        # collects Kivy's data files (default config, fonts, glsl shaders). Adding the
-        # flag on top of the hook makes PyInstaller walk Kivy's submodules and crash
-        # with: ValueError: path must be None or list of paths to look for modules in.
-        # Verified: a build without it launches the GUI correctly.
+        "--hidden-import", "ui",
         "--collect-all", "jmcomic",
         # curl_cffi ships native libraries; present on desktop, absent on Android.
         "--collect-all", "curl_cffi",
-        # Kivy's platform binaries live in separate `kivy_deps.*` distributions
-        # (sdl2, glew, angle). PyInstaller's kivy hook does not always pull them in,
-        # so collect whichever are installed.
-        *kivy_deps_args(),
         # `common` (the commonX package jmcomic imports) is resolved by following the
         # real imports. Do NOT add --collect-submodules for it: that package exposes
-        # no __path__ to pkgutil and PyInstaller raises the same ValueError.
+        # no __path__ to pkgutil and PyInstaller raises
+        # "path must be None or list of paths to look for modules in".
         "--exclude-module", "numpy",
         "--exclude-module", "matplotlib",
         "--exclude-module", "pytest",
         "--exclude-module", "IPython",
         "--exclude-module", "tkinter",
-        # Collecting kivy.core.window forces PyInstaller's isolated analysis child to
-        # import it, which needs a display/GL context. On a headless CI container that
-        # child dies (SubprocessDiedError, exit code 102) or leaves the bundle without
-        # PyInstaller's own bootstrap module ("No module named pyimod02_importers").
-        # Kivy's window providers are loaded at runtime through its own core-selector,
-        # so they do not need to be statically analysed: the SDL2 providers are
-        # gathered by hook-kivy.py, and the rest are genuinely unused here.
-        "--exclude-module", "kivy.core.window.window_x11",
-        "--exclude-module", "kivy.core.window.window_egl_rpi",
-        "--exclude-module", "kivy.core.window.window_sdl3",
-        "--exclude-module", "kivy.core.window.window_wayland",
+        # No GUI toolkit is used any more. Excluding them keeps the bundle small and
+        # avoids pulling a native graphics stack back in.
+        "--exclude-module", "kivy",
+        "--exclude-module", "kivy_deps",
     ]
 
     if args.icon:
@@ -207,14 +168,6 @@ def expected_target(onedir: bool) -> Path:
 
 
 def main(argv=None) -> int:
-    # PyInstaller analyses some packages by importing them in an isolated child
-    # process. On a headless CI container that child can die while collecting
-    # `kivy.core.window` (no display / GL), and the whole build then aborts with
-    # SubprocessDiedError or "No module named 'pyimod02_importers'". Disabling
-    # isolated collection makes PyInstaller analyse in-process instead, which is
-    # what lets Kivy freeze on a runner without a display.
-    os.environ.setdefault("PYINSTALLER_STRICT_COLLECT_MODE", "0")
-
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--onedir", action="store_true",

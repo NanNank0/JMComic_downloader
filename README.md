@@ -1,8 +1,35 @@
 # JMComic 下载器 · JMComic_downloader
 
-把 [JMComic-Crawler-Python](https://github.com/hect0x7/JMComic-Crawler-Python)（`jmcomic`）包装成四种好用的形态：**Windows / Linux / macOS / Android 图形界面**、**给 AI Agent 用的 skill**、**输出 JSON 的命令行工具**。四端共用同一套下载引擎和界面代码。
+把 [JMComic-Crawler-Python](https://github.com/hect0x7/JMComic-Crawler-Python)（`jmcomic`）包装成四种好用的形态：**Windows / Linux / macOS / Android 图形界面**、**给 AI Agent 用的 skill**、**输出 JSON 的命令行工具**。四端共用同一套下载引擎。
 
 > 本项目只是 `jmcomic` 的外壳（wrapper），下载能力全部来自上游库。请遵守所在地区法律，并尊重目标站点的访问频率限制。
+
+---
+
+## 界面长什么样
+
+程序在本地 `127.0.0.1` 上起一个小服务，用**浏览器**打开界面。没有原生窗口，也不依赖任何 GUI 工具包（不用 Kivy、不用 tkinter）。
+
+```
+┌─ JMComic 下载器 ────────────────────────────────┐
+│ 车号 / 链接 [ 438696            ]               │
+│ 类型        (•) 整本   ( ) 单章                 │
+│ 保存到      [C:\Users\你\Downloads\JMComic]     │
+│ 导出        [x] PDF  [ ] ZIP  [ ] 长图          │
+│ 图片并发    [30]    HTTP 后端 [curl_cffi ▾]     │
+│ 代理        [留空 = 跟随系统            ]        │
+│ [开始下载] [取消] [清空日志] [退出程序]          │
+│ ▓▓▓▓▓▓▓▓▓░░░░░░░░                               │
+│ 状态：全部完成                                   │
+├─ 日志 ──────────────────────────────────────────┤
+│ [完成] JM438696 [MANA] 神里绫华 Another story …  │
+│        保存位置：C:\Users\你\Downloads\...       │
+│        图片：16 张 · 耗时：9.25 秒               │
+│        导出文件：…[JM438696]….pdf                │
+└─────────────────────────────────────────────────┘
+```
+
+**为什么用浏览器而不是原生窗口？** 一开始用的是 Kivy（原生窗口），但 Kivy 依赖 SDL2 这套 native 图形栈，导致打包出来的程序在无显示环境下直接崩、macOS 上无法构建。换成网页后，程序只需要 Python + jmcomic，**打包几乎不会失败**，四个平台也共用同一套界面代码。桌面端的代价是界面在浏览器标签页里，而不是独立窗口。
 
 ---
 
@@ -30,14 +57,12 @@
 
 | 平台 | 产物 | 状态 |
 |---|---|---|
-| **Windows** | `jmcomic-downloader.exe`（单文件） | ✅ 已实测 |
-| **Android** | `jmcomic-downloader-*.apk` | ⚠️ 构建配置已完成，**待真机构建验证** |
-| **Linux** | `jmcomic-linux.tar.gz` | ⚠️ 构建配置已完成，**待 Linux 构建验证** |
-| **macOS** | `jmcomic-macos.zip`（内含 `.app`） | ⚠️ 未签名，需先执行 `xattr -dr com.apple.quarantine` |
+| **Windows** | `jmcomic-downloader.exe`（单文件） | ✅ 已实测（打包 + 页面 + 真实下载） |
+| **Linux** | `jmcomic-linux.tar.gz` | ⚠️ CI 构建已通过，**待真机运行验证** |
+| **macOS** | `jmcomic-macos.zip`（内含 `.app`） | ⚠️ 待 CI 验证 |
+| **Android** | `jmcomic-downloader-*.apk` | ⚠️ 构建配置已完成，**待真实构建验证** |
 
-> 标 ⚠️ 的平台是因为开发机是 Windows，无法在本机构建。配置和脚本都写好了，但**没有在真实 Linux/Mac/Android 上跑过**——详见 [PACKAGING.md](PACKAGING.md) 和 [ANDROID.md](ANDROID.md) 里的「验证状态」一节。
-
-首次运行 Windows 版可能有 SmartScreen 提示（未签名），点「更多信息」→「仍要运行」。
+> 标 ⚠️ 的平台是因为开发机是 Windows，无法在本机构建。详见 [PACKAGING.md](PACKAGING.md) 和 [ANDROID.md](ANDROID.md) 的「验证状态」一节。
 
 ---
 
@@ -45,16 +70,19 @@
 
 ### 方式一：图形界面（推荐给普通用户）
 
-从 [Releases](https://github.com/NanNank0/JMComic_downloader/releases/latest) 下载对应平台的包：
+**Windows**：双击 `jmcomic-downloader.exe`，会自动打开浏览器并显示界面。
 
-1. 打开程序
-2. 在「车号 / 链接」里输入号码，例如 `438696`
-3. 点「开始下载」
-4. 下载完成后在「日志」区看到保存路径
+**从源码运行**（任何平台）：
 
-界面里还能设置：整本 / 单章、保存目录、导出格式（PDF / ZIP / 长图）、图片并发数、HTTP 后端、代理。
+```bash
+python -m pip install jmcomic
+python webui/server.py            # 自动打开浏览器
+python webui/server.py --no-browser   # 只起服务，自己打开打印出来的地址
+python webui/server.py --port 8765    # 指定端口
+python webui/server.py --url-file url.txt   # 把地址写入文件（打包版没控制台时用得上）
+```
 
-**多平台一致性**：四个平台跑的是**同一个 Kivy 界面**（`gui/kivy_app.py`）。这保证了行为一致，代价是 Windows 上的控件不是系统原生样式。
+界面上可以设置：整本 / 单章、保存目录、导出格式（PDF / ZIP / 长图）、图片并发数、HTTP 后端、代理。点「退出程序」会停掉本地服务。
 
 ### 方式二：给 AI Agent 用（DSH / Codex / Claude Code）
 
@@ -94,66 +122,20 @@ python scripts/jmctl.py download 438696 --export pdf  # 下载 + 导出 PDF
 
 ## 从源码运行
 
-需要 **Python 3.9+**。注意 **Kivy 界面需要 Python 3.12 或 3.13**（Kivy 暂无 3.14 的 wheel）。
+需要 **Python 3.9+**（网页界面没有额外版本要求，Kivy 时代的 3.12 限制已经取消）。
 
 ```powershell
-# 1. 依赖
 python -m pip install jmcomic
-python -m pip install "kivy[base]"          # 图形界面
 python -m pip install img2pdf Pillow        # 可选：PDF / 长图导出
 
-# 2. 检查环境（会报告解释器路径、jmcomic 版本、缺哪些依赖、能否联网）
-python scripts/jmctl.py doctor
-
-# 3. 启动图形界面
-python gui/kivy_app.py
+python scripts/jmctl.py doctor              # 检查环境
+python webui/server.py                      # 启动界面
 ```
 
 `doctor` 会打印它使用的 Python 解释器路径。**如果你的电脑上有多个 Python，一定要用这个路径去装依赖**，否则会出现「装了但还是 import 失败」：
 
 ```powershell
 "C:\打印出来的\python.exe" -m pip install jmcomic
-```
-
----
-
-## 图形界面说明
-
-```
-┌─ 下载目标 ──────────────────────────────────┐
-│ 车号 / 链接：[ 438696                 ]      │
-│ 类型：      [整本] [单章]                    │
-├─ 输出设置 ──────────────────────────────────┤
-│ 保存到：    [C:\Users\你\Downloads\JMComic] [浏览] │
-│ 导出：      [x] PDF  [ ] ZIP  [ ] 长图       │
-│ 图片并发：  [====30====] 30                  │
-│ HTTP 后端： [curl_cffi ▾]                    │
-│ 代理：      [留空 = 跟随系统          ]      │
-├─────────────────────────────────────────────┤
-│ [开始下载] [取消] [打开目录]                  │
-│ ▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░                     │
-│ 状态：全部完成                                │
-├─ 日志 ───────────────────────────────────────┤
-│ [完成] JM438696 [MANA] 神里绫华 Another story │
-│        保存位置：C:\Users\你\Downloads\...    │
-│        图片：16 张 · 耗时：9.25 秒            │
-│        导出文件：…[JM438696]….pdf             │
-└─────────────────────────────────────────────┘
-```
-
-要点：
-
-- **多个车号**：用空格、逗号、分号或换行分隔，例如 `438696, 123456`。批量下载时某一个失败**不会**中断其他任务。
-- **保存目录**：默认是 `我的文档\Downloads\JMComic`，子目录按 `车号 / 章节标题` 自动分层。Android 上默认存到应用私有目录。
-- **导出**：PDF 需要 `img2pdf`，长图需要 `Pillow`。缺依赖时下载仍正常，只是没产出文件——界面会提示。
-- **HTTP 后端**：默认 `curl_cffi`；**Android 上自动切换为 `requests`**（原因见 [ANDROID.md](ANDROID.md)）。桌面端也可以手动切成 `requests`。
-- **取消**：会等当前正在下载的图片结束后停止，已经下好的部分会被保留。
-- **续传**：再次点「开始下载」即可，已存在的图片自动跳过。
-
-命令行自检（不打开窗口，验证程序是否完好）：
-
-```powershell
-.\dist\jmcomic-downloader.exe --selftest 438696
 ```
 
 ---
@@ -211,7 +193,7 @@ python scripts/jmctl.py config --write option.yml
 client:
   impl: api              # api=移动端接口（默认，兼容性好）；html=网页端（搜索筛选更全）
   postman:
-    type: curl_cffi      # 桌面默认；Android 用 requests（见 ANDROID.md）
+    type: curl_cffi      # 桌面默认；Android 自动用 requests（见 ANDROID.md）
     meta_data:
       proxies: system    # system 跟随系统；null 不用；也可写 "127.0.0.1:7890"
       cookies:           # 只有需要登录才能看的本子才要配
@@ -250,7 +232,7 @@ plugins:
 
 ```powershell
 # Windows / Linux / macOS
-python -m pip install "kivy[base]" jmcomic pyinstaller
+python -m pip install jmcomic pyinstaller
 python gui/build.py                 # 本平台
 python gui/build.py --verify        # 打包后自动跑自检（推荐）
 python gui/build.py --android       # 打印 Android 构建说明
@@ -259,8 +241,18 @@ python gui/build.py --android       # 打印 Android 构建说明
 python gui/build_android.py debug   # -> bin/*.apk
 ```
 
-各平台的细节、系统依赖、AppImage / deb / dmg、签名与公证，见 **[PACKAGING.md](PACKAGING.md)**。
+各平台的细节、AppImage / deb / dmg、签名与公证，见 **[PACKAGING.md](PACKAGING.md)**。
 Android 的 recipe 与 `curl_cffi` 绕行方案，见 **[ANDROID.md](ANDROID.md)**。
+
+---
+
+## 安全性说明
+
+本地服务只绑定 `127.0.0.1`，并且每次启动生成一个随机 token：
+
+- 页面本身在**服务端注入** token（不是放在 URL 里），API 请求都带 token；
+- 所以**别的程序或你打开的恶意网页**无法通过盲发请求来驱动这个下载器；
+- 服务只监听回环地址，不会暴露到局域网。
 
 ---
 
@@ -278,18 +270,23 @@ JMComic_downloader/
 │   ├── jmcore.py              # 平台无关的下载引擎（四端共用）
 │   ├── jmctl.py               # JSON 命令行入口
 │   └── install.py             # 把 skill 装到各 agent 的技能目录
+├── webui/
+│   ├── server.py              # 本地 HTTP 服务 + JSON/SSE API
+│   └── ui.py                  # 界面（HTML/JS，内嵌成字符串）
 ├── gui/
-│   ├── kivy_app.py            # Kivy 界面（四端共用同一套）
 │   ├── build.py               # 桌面打包（PyInstaller）
 │   └── build_android.py       # Android 打包辅助（暂存 + buildozer）
+├── tests/
+│   ├── test_webui.py          # 源码级端到端测试
+│   └── test_frozen.py         # 打包产物端到端测试
 ├── assets/
 │   └── option.example.yml     # 带完整注释的配置模板
 └── .github/workflows/         # Android / Linux / macOS 自动构建
 ```
 
 架构上有一处关键设计：**下载引擎（`jmcore.py`）与界面完全分离**。
-引擎不依赖任何 GUI 库、也不需要终端，所以 CLI、Kivy 界面、Android APK 能共用它。
-这也是 Android 方案能成立的前提——Kivy 应用既没有终端也没有 argparse。
+引擎不依赖任何 GUI 库、也不需要终端，所以 CLI、网页界面、Android APK 能共用它。
+网页界面之所以可行，也正因为引擎本身就能在没有界面的环境里跑。
 
 ---
 
@@ -298,14 +295,14 @@ JMComic_downloader/
 | 现象 | 原因 / 解决 |
 |---|---|
 | `jmcomic is not importable` | 依赖装到了别的 Python 上。用 `jmctl.py doctor` 打印的解释器路径重装 |
-| Kivy 装不上 / `Failed to build 'kivy'` | 你的 Python 太新（3.14+）。换 3.12 或 3.13 |
+| 双击 exe 没反应 | 浏览器没自动打开。用 `--url-file url.txt` 拿到地址，手动打开 |
 | `could not parse a JM id` | 车号不是纯数字。先从文本里把数字提取出来 |
 | `本子/章节不存在` | 号码错了，或者该本子需要登录才能看。先确认号码 |
 | `networkOk: false` | 换 `--client-impl`（api ↔ html），或换 HTTP 后端 / 配置代理 |
 | 下载成功但没有导出文件 | 对应依赖没装（PDF→`img2pdf`，长图→`Pillow`），或该作品没产出图片 |
 | `partial download failure` | 重跑同一条命令即可续传，已下载的会跳过 |
+| 端口被占用 | 换一个：`python webui/server.py --port 8765` |
 | 中文显示成乱码 | 控制台编码问题。加 `$env:PYTHONIOENCODING='utf-8'` |
-| Android APK 启动闪退 | `adb logcat -s python:D` 看报错，见 ANDROID.md 排错表 |
 | macOS 打不开 App | 未签名。执行 `xattr -dr com.apple.quarantine JMComic下载器.app` |
 
 ---
@@ -315,6 +312,6 @@ JMComic_downloader/
 本项目以 **MIT** 协议开源。
 
 - 下载能力来自 [JMComic-Crawler-Python](https://github.com/hect0x7/JMComic-Crawler-Python)（同样 MIT），本项目与该项目及 JMComic 网站**没有任何隶属关系**。
-- 本项目仅供**学习 Python 桌面/移动开发、跨平台打包、以及 Agent Skill 编写**之用。
+- 本项目仅供**学习 Python 跨平台开发、打包、以及 Agent Skill 编写**之用。
 - 请自行确认在你的司法辖区内使用本工具是合法的；请勿用于传播或商业用途。
 - 请勿滥用：默认并发已经比较保守，**不要**把并发调到 50 以上，也不要短时间内批量抓取大量作品。
