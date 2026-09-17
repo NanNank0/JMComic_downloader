@@ -327,7 +327,48 @@ WEBVIEW ENTRYPOINT: FAIL
 
 ---
 
-## 附录：两个值得记住的内部细节
+## 附录：三个值得记住的内部细节
+
+### 改了 `buildozer.spec` 却没生效？
+
+`p4a create` 会把 spec 里的值（`versionName`、权限、应用名）**烧进生成好的 Android 工程**，
+而 buildozer 在 dist 已存在时会**跳过 create**。所以：
+
+- 改 `webui/` 里的**源码** → 会被重新打包，**生效**（`private.tar` 每次重新生成）
+- 改 `buildozer.spec` 里的**元数据**（版本、权限、包名）→ 复用旧 dist，**不生效**
+
+真实踩到过：把 `version` 从 `1.0.0` 改成 `1.1.0` 并重新构建后，
+APK 文件名和 `AndroidManifest.xml` 里的 `versionName` **仍然是 1.0.0**。
+
+CI 里的应对是**去掉 `.buildozer` 缓存的 `restore-keys` 兜底**：
+
+```yaml
+key: buildozer-project-${{ hashFiles('buildozer.spec', 'recipes/**') }}
+# 没有 restore-keys，故意不加
+```
+
+否则 spec 变了也会命中「近似」的旧缓存。代价是 spec 一改就要全量重建，
+但 spec 很少改，正确性优先。本地构建同理：
+
+```bash
+rm -rf .buildozer/android/platform/build-*/dists   # 强制重新 create
+```
+
+### 怎么确认 APK 里到底有没有你的代码
+
+不需要装到手机上——APK 是个 zip，p4a 把应用源码放在 `assets/private.tar` 里
+（`.py` 已被编译成 `.pyc`）：
+
+```python
+import zipfile, tarfile, io
+z = zipfile.ZipFile('jmcomicdownloader-....apk')
+tf = tarfile.open(fileobj=io.BytesIO(z.read('assets/private.tar')))
+print([m.name for m in tf.getmembers()])
+# ['jmcore.pyc', 'main.pyc', 'server.pyc', 'sitecustomize.pyc', 'ui.pyc', 'p4a_env_vars.txt']
+```
+
+用这个办法验证过 `v1.3.2` 的 APK：里面有 `main.pyc`，且其常量池含
+`main.py starting` / `ANDROID_WEBVIEW_PORT`，`server.pyc` 含 `__TOKEN__` —— 确认打包的是新代码。
 
 ### 为什么升级 pip 的 p4a 没用
 

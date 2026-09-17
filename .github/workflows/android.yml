@@ -73,12 +73,23 @@ jobs:
           key: buildozer-global-${{ hashFiles('buildozer.spec') }}
           restore-keys: buildozer-global-
 
+      # NOTE: no `restore-keys` here, deliberately.
+      #
+      # p4a bakes spec-derived values (versionName, permissions, app name) into the
+      # generated Android project during `p4a create`, and buildozer reuses an existing
+      # dist instead of re-running create. With a `restore-keys` fallback, a changed
+      # buildozer.spec still restores the OLD .buildozer, so those changes are silently
+      # ignored - observed for real: version 1.1.0 in the spec, versionName 1.0.0 in the
+      # shipped APK manifest. (Source files ARE re-packaged, which is why a fix to
+      # webui/ still lands.)
+      #
+      # Dropping the fallback means a spec change forces a fresh, correct build. That
+      # costs a full rebuild, but spec changes are rare and correctness wins.
       - name: Cache buildozer project directory
         uses: actions/cache@v4
         with:
           path: .buildozer
           key: buildozer-project-${{ hashFiles('buildozer.spec', 'recipes/**') }}
-          restore-keys: buildozer-project-
 
       # `buildozer android debug` lets Gradle sign with ~/.android/debug.keystore.
       # A fresh runner generates a NEW random key, so APKs from different runs have
