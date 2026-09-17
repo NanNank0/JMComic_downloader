@@ -165,6 +165,14 @@ jobs:
           python -m pip install "kivy[base]"
 
       - name: Build .app
+        # Same headless-analysis hazard as Linux: PyInstaller's isolated child imports
+        # kivy.core.window, and a runner without a display kills it (which surfaces as
+        # "No module named 'pyimod02_importers'"). Dummy SDL drivers avoid the probe.
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+          KIVY_NO_ARGS: '1'
+          KIVY_NO_CONSOLELOG: '1'
         run: |
           set -o pipefail
           if ! python gui/build.py --onedir --console 2>&1 | tee build.log; then

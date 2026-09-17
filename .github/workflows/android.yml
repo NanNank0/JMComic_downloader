@@ -78,23 +78,32 @@ jobs:
           echo "STAGING_OK"
           ls -la gui/
 
-      # buildozer ships a bare SDK whose build-tools/components can be missing or
-      # partial, producing "build-tools folder not found" / "Aidl not found".
-      # `buildozer android debug --sdk` stops after setting the SDK up, so run it
-      # first, then install the exact components p4a needs.
+      # buildozer ships a bare SDK whose build-tools are missing, producing
+      # "build-tools folder not found" / "Aidl not found". `buildozer android debug
+      # --sdk` stops after fetching the SDK, then sdkmanager installs the exact
+      # components python-for-android needs. The SDK location varies between
+      # buildozer versions, so both known paths are probed.
       - name: Ensure Android SDK build-tools
         run: |
           buildozer android debug --sdk || true
-          SDK="$HOME/.buildozer/android/platform/android-sdk"
-          SDKMGR="$SDK/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -x "$SDKMGR" ]; then
-            echo "::warning::sdkmanager not found at $SDKMGR; relying on buildozer"
-            ls -la "$SDK" || true
+          SDKMGR=""
+          for cand in \
+              "$HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin/sdkmanager" \
+              "$HOME/.buildozer/android/platform/android-sdk/tools/bin/sdkmanager" \
+              "$HOME/.buildozer/android/platform/android-sdk/cmdline-tools/bin/sdkmanager"; do
+            if [ -x "$cand" ]; then SDKMGR="$cand"; break; fi
+          done
+          if [ -z "$SDKMGR" ]; then
+            echo "::warning::sdkmanager not found; searching"
+            find "$HOME/.buildozer" -name sdkmanager -type f 2>/dev/null | head -5 || true
             exit 0
           fi
+          echo "using $SDKMGR"
           yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
           yes | "$SDKMGR" "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
-          ls -la "$SDK/build-tools" || true
+          SDK="${SDKMGR%%/cmdline-tools*}"
+          SDK="${SDK%%/tools*}"
+          ls -la "$SDK/build-tools" 2>/dev/null || echo "::warning::build-tools still absent"
 
       - name: Build APK (debug)
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_type == 'debug' }}
