@@ -2,36 +2,44 @@
 """
 Guard against the Android dependency trap that broke the APK build.
 
-python-for-android resolves every requirement that has **no recipe** by running:
+Background
+----------
+python-for-android resolves every requirement that has **no recipe** by running a pip
+dry-run restricted to wheels for Android platform tags (see p4a's build.py):
 
-    pip install <pkg> --dry-run --only-binary=:all: --platform=android_24_arm64_v8a ...
+    pip install <pkgs> --dry-run --break-system-packages --ignore-installed \
+        --only-binary=:all: --report <f> --platform=android_24_arm64_v8a ...
 
-`--only-binary=:all:` means "wheels only". A package with a pure-Python wheel
-(`*-py3-none-any.whl`) satisfies any platform tag, so it resolves fine. A package that
-only ships **platform-specific** wheels (a C extension) has no android_* wheel and no
-pure wheel, so the dry-run fails and p4a emits the extremely unhelpful:
+`--only-binary=:all:` means wheels only. A pure-Python wheel (`*-py3-none-any.whl`)
+matches any platform tag, so it resolves. A C extension that only ships
+platform-specific wheels has no `android_*` wheel and no pure wheel, so the whole
+dry-run fails and p4a reports just:
 
     [WARNING]: Auto module resolution failed: ...
 
-That is exactly what `pyyaml` did: 72 wheels, none of them pure, no p4a recipe.
+That is exactly what `pyyaml` did, and it cost several 30-minute CI cycles to find.
 
-This test encodes the rule so the mistake cannot come back:
+What this test does
+-------------------
+It runs **the same pip command** for the packages p4a will have to resolve, so a
+regression fails here in seconds with pip's actual message, e.g.:
 
-  For every package named in buildozer.spec's `requirements` and in the local jmcomic
-  recipe's `depends`, the package must either
-    (a) have a p4a recipe (listed in RECIPE_PROVIDED below), or
-    (b) publish a pure-Python wheel on PyPI.
+    ERROR: Could not find a version that satisfies the requirement pyyaml
+           (from versions: none)
 
-Run it from the project root:  python tests/test_android_requirements.py
-It needs network access (PyPI JSON API) and exits non-zero on violation.
+Covered packages = buildozer.spec `requirements` + the local jmcomic recipe's `depends`,
+minus everything p4a builds from a recipe (RECIPE_PROVIDED).
+
+Run from the project root:  python tests/test_android_requirements.py
+Needs network (and pip). Exits non-zero on violation.
 """
 
 from __future__ import annotations
 
-import json
+import os
 import re
+import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -39,8 +47,8 @@ SPEC = PROJECT_ROOT / "buildozer.spec"
 RECIPE = PROJECT_ROOT / "recipes" / "jmcomic" / "__init__.py"
 
 # Packages p4a builds from its own recipes, so they never go through PyPI resolution.
-# Keep this in sync with what buildozer.spec actually asks for; it is deliberately a
-# short explicit list rather than "all p4a recipes" so the test stays meaningful.
+# Keep this in sync with what buildozer.spec asks for - it is deliberately an explicit
+# list rather than "every p4a recipe" so the test stays meaningful.
 RECIPE_PROVIDED = {
     "python3",
     "pyjnius",       # webview bootstrap needs it; p4a has a recipe
@@ -48,6 +56,14 @@ RECIPE_PROVIDED = {
     "pycryptodome",
     "jmcomic",       # our own recipe in recipes/jmcomic/
 }
+
+# Tags p4a would use for `android.archs = arm64-v8a, armeabi-v7a` at ndk_api 24.
+# See PyProjectRecipe.get_wheel_platform_tags().
+PLATFORM_TAGS = ["android_24_arm64_v8a", "android_24_aarch64", "android_24_arm"]
+
+# p4a passes its hostpython version; android wheels for pure packages are
+# `py3-none-any`, so this only matters for packages that should not be here anyway.
+PYTHON_VERSION = os.environ.get("JM_ANDROID_PYTHON_VERSION", "3.11")
 
 
 def parse_requirements() -> list:
@@ -59,6 +75,8 @@ def parse_requirements() -> list:
 
 
 def parse_recipe_depends() -> list:
+    if not RECIPE.is_file():
+        return []
     text = RECIPE.read_text(encoding="utf-8")
     match = re.search(r"^\s*depends\s*=\s*\[(.*?)\]", text, re.MULTILINE | re.DOTALL)
     if not match:
@@ -66,71 +84,66 @@ def parse_recipe_depends() -> list:
     return [item.strip().strip("'\"") for item in match.group(1).split(",") if item.strip()]
 
 
-def has_pure_wheel(package: str):
-    """(True/False, explanation) for whether PyPI offers a pure-Python wheel."""
-    url = f"https://pypi.org/pypi/{package}/json"
-    try:
-        with urllib.request.urlopen(url, timeout=30) as response:
-            data = json.load(response)
-    except Exception as exc:
-        return None, f"PyPI lookup failed: {exc}"
-
-    version = data["info"]["version"]
-    files = [f["filename"] for f in data["releases"].get(version, [])]
-    if not files:
-        return None, f"{package} {version}: no files published"
-
-    pure = [f for f in files if f.endswith(".whl") and "py3-none-any" in f]
-    if pure:
-        return True, f"{package} {version}: pure wheel {pure[0]}"
-    wheels = [f for f in files if f.endswith(".whl")]
-    return False, (f"{package} {version}: {len(wheels)} wheels but none pure-Python "
-                   f"(no android_* wheel exists either)")
-
-
 def main() -> int:
     requirements = parse_requirements()
     depends = parse_recipe_depends()
+
     print(f"buildozer.spec requirements : {requirements}")
     print(f"recipes/jmcomic depends     : {depends}")
-    print()
 
-    # `pyyaml` is the concrete regression this test exists for. If it is ever added
-    # back, it must come with a recipe - so fail loudly and explain.
     packages = []
     for name in requirements + depends:
         if name not in packages:
             packages.append(name)
 
-    failures = []
-    for name in packages:
-        if name in RECIPE_PROVIDED:
-            print(f"  OK    {name:16} (p4a recipe)")
-            continue
-        ok, why = has_pure_wheel(name)
-        if ok is True:
-            print(f"  OK    {name:16} {why}")
-        elif ok is False:
-            print(f"  FAIL  {name:16} {why}")
-            failures.append(name)
-        else:
-            print(f"  SKIP  {name:16} {why}")
-
+    to_resolve = [p for p in packages if p not in RECIPE_PROVIDED]
+    print(f"p4a recipe-provided         : {sorted(RECIPE_PROVIDED & set(packages))}")
+    print(f"must resolve from PyPI      : {to_resolve}")
     print()
-    if failures:
-        print("这些包既没有 p4a recipe，也没有纯 Python wheel，")
-        print("会让 p4a 的 'Auto module resolution' 失败：")
-        for name in failures:
-            print(f"  - {name}")
-        print()
-        print("解决办法二选一：")
-        print("  1. 给它写一个 recipes/<name>/ 下的 recipe（参考 recipes/jmcomic/）")
-        print("  2. 确认运行时真的不需要它，然后从 requirements / depends 里删掉")
-        print("     （注意：依赖是惰性 import 才可以删，见 ANDROID.md）")
-        return 1
 
-    print("ANDROID REQUIREMENTS: PASS — 每个包都能被 p4a 解析")
-    return 0
+    if not to_resolve:
+        print("ANDROID REQUIREMENTS: PASS - nothing needs PyPI resolution")
+        return 0
+
+    with __import__("tempfile").TemporaryDirectory(prefix="jm-android-req-") as tmp:
+        cmd = [
+            sys.executable, "-m", "pip", "install",
+            "--dry-run",
+            "--ignore-installed",
+            "--only-binary=:all:",
+            "--disable-pip-version-check",
+            "-q",
+            *[f"--platform={tag}" for tag in PLATFORM_TAGS],
+            "--python-version", PYTHON_VERSION,
+            "--target", str(Path(tmp) / "out"),
+            *to_resolve,
+        ]
+        print("running the same pip resolution p4a performs:")
+        print("  " + " ".join(cmd))
+        print()
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace")
+
+    if result.returncode == 0:
+        print("ANDROID REQUIREMENTS: PASS - p4a can resolve every package")
+        return 0
+
+    print("ANDROID REQUIREMENTS: FAIL - p4a's resolution would abort the build")
+    print()
+    for line in (result.stdout or "").splitlines() + (result.stderr or "").splitlines():
+        if "ERROR" in line or "No matching distribution" in line:
+            print("  " + line.strip())
+    print()
+    print("失败原因：p4a 只用 wheel（--only-binary=:all:）且平台标签是 android_*，")
+    print("所以上面这些包既没有纯 Python wheel、也没有 android_* wheel。")
+    print()
+    print("解决办法二选一：")
+    print("  1. 给它写一个 recipes/<name>/ 下的 recipe（参考 recipes/jmcomic/），")
+    print("     并把它加进本文件的 RECIPE_PROVIDED；")
+    print("  2. 确认运行时真的不需要它，然后从 buildozer.spec 的 requirements 和")
+    print("     recipes/jmcomic 的 depends 里都删掉（前提：依赖是惰性 import，")
+    print("     见 ANDROID.md 的 pyyaml 案例）。")
+    return 1
 
 
 if __name__ == "__main__":
