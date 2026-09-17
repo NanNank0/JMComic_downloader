@@ -164,17 +164,32 @@ jobs:
         run: |
           SDK="$HOME/.buildozer/android/platform/android-sdk"
           {
-            echo "SDK=$SDK exists=$([ -d "$SDK" ] && echo yes || echo no)"
+            echo "SDK exists=$([ -d "$SDK" ] && echo yes || echo no)"
             echo "top: $(ls "$SDK" 2>/dev/null | tr '\n' ' ')"
             echo "build-tools: $(ls "$SDK/build-tools" 2>/dev/null | tr '\n' ' ')"
             echo "platforms: $(ls "$SDK/platforms" 2>/dev/null | tr '\n' ' ')"
             SM=$(find "$HOME/.buildozer" -name sdkmanager -type f 2>/dev/null | head -1)
             echo "sdkmanager=$SM"
-            if [ -n "$SM" ]; then
-              echo "available build-tools: $(yes | "$SM" --list 2>/dev/null | grep -o 'build-tools;[0-9.]*' | sort -u | tr '\n' ' ')"
-            fi
           } > diag.txt 2>&1
-          echo "::error title=android sdk state::$(tr '\n' ' | ' < diag.txt | cut -c1-900)"
+          echo "::error title=android sdk state::$(tr '\n' ' | ' < diag.txt | cut -c1-500)"
+
+      # p4a's real error is in its own build.log, which is far too long to print. Pull
+      # out the interesting part so the failure is readable from the API.
+      - name: Diagnose the python-for-android build
+        if: failure()
+        run: |
+          LOG=$(ls .buildozer/android/platform/build-*/build.log 2>/dev/null | head -1)
+          if [ -z "$LOG" ]; then
+            echo "::error title=p4a::no build.log found"
+            exit 0
+          fi
+          # Prefer python tracebacks / explicit errors over the thousands of INFO lines.
+          {
+            grep -nE "Traceback \(most recent call last\)|^[A-Za-z_.]*Error|Exception:|recipe .* (failed|error)|ERROR:" "$LOG" | tail -n 12
+          } > p4a_diag.txt 2>&1
+          echo "::error title=p4a error::$(tr '\n' ' | ' < p4a_diag.txt | cut -c1-1100)"
+          echo "===== last 40 lines of the p4a log ====="
+          tail -n 40 "$LOG"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
