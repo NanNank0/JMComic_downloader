@@ -67,6 +67,22 @@ android.logcat_filters = *:S python:D
 # Our recipe lives here (jmcomic with --no-deps).
 p4a.local_recipes = recipes
 
+# Use python-for-android's develop branch instead of the default 'master'.
+#
+# Reason: buildozer git-clones p4a into .buildozer/android/platform/python-for-android
+# and runs THAT copy (not the pip-installed one). The master copy that CI had cached
+# contains
+#     from pip._internal.exceptions import BuildDependencyInstallError
+# which modern pip no longer exports, and p4a upgrades pip inside its own build venv,
+# so the build always died with:
+#     ImportError: cannot import name 'BuildDependencyInstallError'
+# develop no longer references that name (verified against its source).
+#
+# buildozer re-clones whenever the configured branch differs from the cached clone's
+# branch, so this also repairs an existing stale cache. For a fully reproducible build,
+# pin `p4a.commit` to a specific sha instead of tracking a branch.
+p4a.branch = develop
+
 [buildozer]
 log_level = 2
 warn_on_root = 1

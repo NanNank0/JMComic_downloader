@@ -182,23 +182,30 @@ xcrun stapler staple dist/jmcomic-downloader.dmg
 | 引擎无 GUI/终端依赖 | ✅ 已实测（CI 里也断言了） |
 | 网页界面：本地服务 + API + SSE | ✅ **已实测**（源码级端到端：16 张图 + PDF） |
 | CLI JSON 契约不变 | ✅ 已实测 |
-| **Windows 打包 + 冻结产物端到端** | ✅ **已实测**（49.6 MB 单文件，Python 3.14，无 Kivy） |
-| **Linux 构建** | ✅ CI 已通过（旧方案时），新方案待重跑 |
-| macOS 构建 | ⚠️ 新方案应该会通过（不再有 Kivy），**待 CI 验证** |
+| **Windows 打包 + 冻结产物端到端** | ✅ **已实测**（onedir 9.8 MB / onefile 49.6 MB，Python 3.14，无 Kivy） |
+| **Linux 构建** | ✅ **CI 全绿**（`linux bundle` job，含冻结产物端到端测试） |
+| **macOS 构建** | ✅ **CI 全绿**（`macos app` job，产出并校验 `.app`） |
 | AppImage / deb / dmg | ❌ 未实测，命令按官方文档写 |
+
+### macOS 曾经失败的两个原因（都已修）
+
+1. **Kivy** —— PyInstaller 的隔离子进程要 import `kivy.core.window`，无显示环境直接死
+   （表现为 `SubprocessDiedError`，或作为连锁症状的 `No module named 'pyimod02_importers'`）。
+   换掉原生 GUI 后这条路径不存在了。
+2. **我自己的产物路径 bug** —— `expected_target()` 在 macOS 上无条件找 `.app`，但 CI 用
+   `--console` 时 PyInstaller 只产出普通目录，于是**构建成功却被判为失败**。
+   现在按 `windowed` 决定找 `.app` 还是目录。
 
 ### 之前踩过、现在已被换架构消掉的坑
 
 | 现象 | 根因 |
 |---|---|
-| `SubprocessDiedError ... exit code 102` | PyInstaller 隔离子进程要 import `kivy.core.window`，无显示环境直接死 |
-| `No module named 'pyimod02_importers'` | 上一条的连锁症状（**注意：这行在成功构建里也会出现，是良性 TRACE**） |
 | `option --console not recognized` 后退出 2 | Kivy 导入时解析 `sys.argv`，把 `build.py` 自己的参数当成 Kivy 的 |
 | `ValueError: path must be None or list of paths` | `--collect-all kivy` 与 PyInstaller 自带 `hook-kivy.py` 冲突 |
 | 窗口弹出但**关不掉** | 我写的错误弹窗在**没有事件循环**的情况下创建了 Kivy `Popup` |
 
 最后一条说明换架构的另一个好处：不再有「窗口弹出来关不掉」这类只属于 GUI 工具包的问题。
 
-**仍存在的一个坑**（与本项目无关，但会影响你）：打包前**务必关掉正在运行的旧 exe**，
-否则 Windows 会锁住 `dist\jmcomic-downloader.exe`，PyInstaller 清理失败会留下**半截的 exe**，
+**仍存在的一个坑**（与本项目无关，但会影响你）：打包前**务必关掉正在运行的旧程序**，
+否则 Windows 会锁住 `dist` 里的文件，PyInstaller 清理失败会留下**半截的二进制**，
 运行时报 `Failed to execute script ... unhandled exception`，看着像代码 bug。
