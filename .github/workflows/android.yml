@@ -80,7 +80,12 @@ jobs:
 
       - name: Build APK (debug)
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_type == 'debug' }}
-        run: buildozer android debug
+        run: |
+          set -o pipefail
+          if ! buildozer android debug 2>&1 | tee apk-build.log; then
+            echo "::error title=apk build failed::$(grep -iE 'error|exception|no module|not found|cannot|failed' apk-build.log | tail -n 3 | tr '\n' ' | ')"
+            exit 1
+          fi
 
       - name: Build release bundle
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_type == 'release' }}

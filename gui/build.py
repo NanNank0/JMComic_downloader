@@ -104,6 +104,31 @@ invariant the app depends on.
 """
 
 
+def kivy_deps_args() -> list:
+    """
+    `--collect-all` flags for whichever Kivy platform dependency packages exist.
+
+    Kivy keeps its SDL2 / GLEW / ANGLE binaries in separate distributions rather than
+    inside the kivy package, so a build that only collects `kivy` can fail to start
+    with a missing-DLL/so error. The set differs per platform (Windows has angle and
+    glew; Linux/macOS have neither), so probe instead of hardcoding.
+    """
+    import importlib.util
+
+    args = []
+    for name in ("kivy_deps.sdl2", "kivy_deps.glew", "kivy_deps.angle",
+                 "kivy_deps.sdl2_dev"):
+        try:
+            # find_spec raises (not returns None) when the PARENT package is absent,
+            # e.g. on Linux/macOS where there is no kivy_deps at all.
+            found = importlib.util.find_spec(name) is not None
+        except (ImportError, ModuleNotFoundError, ValueError):
+            found = False
+        if found:
+            args += ["--collect-all", name]
+    return args
+
+
 def build_args(args) -> list:
     onedir = args.onedir
     if sys.platform == "darwin" and not args.onefile:
@@ -135,6 +160,10 @@ def build_args(args) -> list:
         "--collect-all", "jmcomic",
         # curl_cffi ships native libraries; present on desktop, absent on Android.
         "--collect-all", "curl_cffi",
+        # Kivy's platform binaries live in separate `kivy_deps.*` distributions
+        # (sdl2, glew, angle). PyInstaller's kivy hook does not always pull them in,
+        # so collect whichever are installed.
+        *kivy_deps_args(),
         # `common` (the commonX package jmcomic imports) is resolved by following the
         # real imports. Do NOT add --collect-submodules for it: that package exposes
         # no __path__ to pkgutil and PyInstaller raises the same ValueError.

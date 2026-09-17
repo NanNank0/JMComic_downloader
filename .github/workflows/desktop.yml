@@ -117,7 +117,12 @@ jobs:
           python -m pip install "kivy[base]"
 
       - name: Build
-        run: python gui/build.py --onedir --console
+        run: |
+          set -o pipefail
+          if ! python gui/build.py --onedir --console 2>&1 | tee build.log; then
+            echo "::error title=linux build failed::$(grep -iE 'error|exception|no module|not found|cannot' build.log | tail -n 3 | tr '\n' ' | ')"
+            exit 1
+          fi
 
       - name: Run the bundle's selftest
         # Downloads one chapter, so it also proves HTTP + image decoding work inside
@@ -152,7 +157,12 @@ jobs:
           python -m pip install "kivy[base]"
 
       - name: Build .app
-        run: python gui/build.py --onedir --console
+        run: |
+          set -o pipefail
+          if ! python gui/build.py --onedir --console 2>&1 | tee build.log; then
+            echo "::error title=macos build failed::$(grep -iE 'error|exception|no module|not found|cannot' build.log | tail -n 3 | tr '\n' ' | ')"
+            exit 1
+          fi
 
       - name: Zip the bundle
         run: |
