@@ -196,6 +196,14 @@ def expected_target(onedir: bool) -> Path:
 
 
 def main(argv=None) -> int:
+    # PyInstaller analyses some packages by importing them in an isolated child
+    # process. On a headless CI container that child can die while collecting
+    # `kivy.core.window` (no display / GL), and the whole build then aborts with
+    # SubprocessDiedError or "No module named 'pyimod02_importers'". Disabling
+    # isolated collection makes PyInstaller analyse in-process instead, which is
+    # what lets Kivy freeze on a runner without a display.
+    os.environ.setdefault("PYINSTALLER_STRICT_COLLECT_MODE", "0")
+
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--onedir", action="store_true",

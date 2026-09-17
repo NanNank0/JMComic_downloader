@@ -78,6 +78,24 @@ jobs:
           echo "STAGING_OK"
           ls -la gui/
 
+      # buildozer ships a bare SDK whose build-tools/components can be missing or
+      # partial, producing "build-tools folder not found" / "Aidl not found".
+      # `buildozer android debug --sdk` stops after setting the SDK up, so run it
+      # first, then install the exact components p4a needs.
+      - name: Ensure Android SDK build-tools
+        run: |
+          buildozer android debug --sdk || true
+          SDK="$HOME/.buildozer/android/platform/android-sdk"
+          SDKMGR="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMGR" ]; then
+            echo "::warning::sdkmanager not found at $SDKMGR; relying on buildozer"
+            ls -la "$SDK" || true
+            exit 0
+          fi
+          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          yes | "$SDKMGR" "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
+          ls -la "$SDK/build-tools" || true
+
       - name: Build APK (debug)
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_type == 'debug' }}
         run: |
