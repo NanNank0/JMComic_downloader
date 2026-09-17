@@ -78,20 +78,50 @@ jobs:
           echo "STAGING_OK"
           ls -la webui/
 
-      # The `.buildozer` cache restores buildozer's recorded install state along with
-      # the (possibly incomplete) SDK. buildozer short-circuits its installer on a
-      # state match:
+      # buildozer installs a 2021-vintage cmdline-tools whose sdkmanager cannot run on
+      # JDK 17 (it needs the JAXB classes removed in Java 11), so it silently installs
+      # nothing. The diagnostic run showed exactly that:
+      #
+      #   top: commandlinetools-linux-6514223_latest.zip tools
+      #   build-tools: (empty)   platforms: (empty)   available build-tools: (empty)
+      #
+      # -> no build-tools -> "build-tools folder not found" / "Aidl not found".
+      #
+      # Fix: put a CURRENT cmdline-tools into buildozer's SDK directory. buildozer looks
+      # for `tools/bin/sdkmanager` (buildozer/targets/android.py, sdkmanager_path), so
+      # the modern one is symlinked there too.
+      - name: Provision a modern Android SDK
+        run: |
+          SDK="$HOME/.buildozer/android/platform/android-sdk"
+          mkdir -p "$SDK"
+          if [ ! -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+            echo "downloading current cmdline-tools"
+            curl -fsSL -o /tmp/clt.zip \
+              https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            rm -rf /tmp/clt && mkdir -p /tmp/clt
+            unzip -q /tmp/clt.zip -d /tmp/clt
+            mkdir -p "$SDK/cmdline-tools"
+            mv /tmp/clt/cmdline-tools "$SDK/cmdline-tools/latest"
+          fi
+          mkdir -p "$SDK/tools/bin"
+          ln -sf "$SDK/cmdline-tools/latest/bin/sdkmanager" "$SDK/tools/bin/sdkmanager"
+          ln -sf "$SDK/cmdline-tools/latest/bin/avdmanager" "$SDK/tools/bin/avdmanager"
+          SM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          "$SM" --version
+          yes | "$SM" --sdk_root="$SDK" --licenses > /dev/null 2>&1 || true
+          "$SM" --sdk_root="$SDK" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          echo "build-tools now: $(ls "$SDK/build-tools" 2>/dev/null | tr '\n' ' ')"
+
+      # The `.buildozer` cache also restores buildozer's recorded install state, and
+      # buildozer short-circuits its installer on a state match:
       #
       #     cache_key = 'android:sdk_installation'
       #     if self.buildozer.state.get(cache_key, None) == cache_value:
       #         return True          # <- never installs build-tools
       #
-      # so once a run recorded "SDK installed" without build-tools, every later run
-      # skips them and fails with "build-tools folder not found" / "Aidl not found".
-      # Deleting state.db forces the installer to run again while keeping the cache.
+      # Deleting state.db makes it re-check the SDK with the good sdkmanager above.
       - name: Clear stale buildozer SDK state
         run: |
-          ls -la .buildozer 2>/dev/null || echo "(.buildozer not restored)"
           rm -f .buildozer/state.db
           echo "cleared .buildozer/state.db so SDK components are re-checked"
 
