@@ -204,10 +204,80 @@ xcrun stapler staple dist/jmcomic-downloader.dmg
 | 引擎无 GUI/终端依赖 | ✅ 已实测（CI 里也断言了） |
 | Kivy 界面 + 端到端下载 | ✅ 已实测（Windows，含跨线程回调） |
 | CLI JSON 契约不变 | ✅ 已实测 |
-| **Windows Kivy 打包 + 自检** | ✅ 已实测 |
-| **Linux 构建与运行** | ❌ 未实测（无 Linux 环境） |
-| **macOS 构建与运行** | ❌ 未实测（无 Mac） |
+| **Windows Kivy 打包 + 自检** | ✅ **已实测**（28 MB，GUI 能启动） |
+| **Linux 构建** | ✅ **CI 已通过**（GitHub Actions `linux bundle` job） |
+| Linux 产物启动/下载 | ⚠️ 构建通过，运行未在真机验证 |
+| **macOS 构建** | ❌ CI 仍未通过（见下） |
 | **AppImage / deb / dmg** | ❌ 未实测，命令按官方文档写 |
 
-Linux 和 macOS 的构建脚本、CI 配置都是按 PyInstaller 官方用法写的，
-但**没有在真实 Linux/Mac 上跑过**。第一次失败的话把 `gui/build.py --console` 的完整输出贴出来。
+### CI 踩过的坑（都已修复，供参考）
+
+| 现象 | 根因 |
+|---|---|
+| Android `prepare` 步骤失败 | `.gitignore` 里 `*.spec` 把 `buildozer.spec` 也忽略了，仓库里根本没这个文件 |
+| `SubprocessDiedError ... exit code 102` | PyInstaller 用隔离子进程分析 `kivy.core.window`，无显示的容器里子进程直接死 |
+| `No module named 'pyimod02_importers'` | 同上，子进程死亡导致的连锁症状 |
+| `ValueError: path must be None or list of paths` | `--collect-all kivy` 与 PyInstaller 自带的 `hook-kivy.py` 冲突 |
+| `option --console not recognized` 后退出 2 | Kivy 导入时解析 `sys.argv`，把 `build.py` 自己的参数当成了 Kivy 的 |
+
+修复手段：排除 x11/wayland 等需要显示设备的 window provider；Linux CI 用 `xvfb-run` 提供虚拟显示；
+macOS 补 `SDL_VIDEODRIVER=dummy`。
+
+### Linux ✅
+
+CI 的 `linux bundle` job **已通过**，产物是 `dist/jmcomic-downloader/` 文件夹（作为 artifact 上传）。
+
+关键点：PyInstaller 会用**隔离子进程**去分析 `kivy.core.window`，而在没有显示设备的容器里
+这个子进程会直接死亡，报出来是 `SubprocessDiedError ... exit code 102`，或者连锁成
+`No module named 'pyimod02_importers'`（后者有迷惑性，看起来像 PyInstaller 自身缺文件）。
+
+解决办法两条并用：
+
+1. `gui/build.py` 里排除需要真实显示设备的 Kivy window provider
+   （x11 / egl_rpi / sdl3 / wayland）。这些在运行时由 Kivy 的 core-selector 动态选择，
+   SDL2 provider 由 PyInstaller 自带的 `hook-kivy.py` 收集，所以静态分析它们没有意义。
+2. CI 里用 `xvfb-run -a python gui/build.py ...` 提供虚拟显示。
+
+本地在无桌面的 Linux 上构建时同样建议套 `xvfb-run`。
+
+### macOS ❌ 仍未通过
+
+CI 的 macOS job 报 `No module named 'pyimod02_importers'`，与 Linux 同源。
+已经按 Linux 的解法补了 `SDL_VIDEODRIVER=dummy` 等环境变量，但**没有生效**；
+由于没有 Mac 可以本地复现，未能确认根因。
+
+**如果你有 Mac，请直接在 Mac 上构建**，比依赖 CI 可靠得多：
+
+```bash
+python3.12 -m venv .venv && . .venv/bin/activate
+pip install "kivy[base]" jmcomic requests img2pdf pillow pyinstaller
+SDL_VIDEODRIVER=dummy python gui/build.py --onedir --console --verify
+```
+
+如果报同样的 `pyimod02_importers`，把完整输出开 issue 或回贴，那说明
+PyInstaller 在该 macOS 版本上的隔离子进程机制有问题，届时可以考虑
+`--onedir` 配合 `--noupx`，或改用 py2app。
+
+### Android ❌ 仍未通过
+
+CI 的 `apk` job 在真正的 `buildozer android debug` 阶段失败：
+
+```
+# build-tools folder not found .../android-sdk/build-tools
+# Aidl not found, please install it.
+```
+
+即 buildozer 取下来的 Android SDK 里缺 build-tools。已尝试先跑
+`buildozer android debug --sdk` 再用 sdkmanager 补装 `build-tools;34.0.0`，
+但 sdkmanager 的实际路径和 buildozer 版本相关，探测没命中。
+
+**建议直接在 WSL2 里构建**（见 [ANDROID.md](ANDROID.md) 方法 1），
+可以实时看到错误并补装 SDK 组件，比盲改 CI 快很多。若在 WSL 里也遇到同样报错，
+手动补装即可：
+
+```bash
+SDK=$HOME/.buildozer/android/platform/android-sdk
+find $SDK -name sdkmanager -type f
+# 用上面找到的路径：
+$SDKMGR "build-tools;34.0.0" "platforms;android-34"
+```

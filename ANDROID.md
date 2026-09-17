@@ -200,9 +200,33 @@ base64 -w0 release.keystore    # 复制输出
 | Kivy 界面与控制逻辑 | ✅ **已实测**（Windows，含端到端下载与跨线程回调） |
 | `jmcore` 无 GUI 依赖 | ✅ **已实测** |
 | p4a recipe 类 API 与基类匹配 | ✅ **已核对源码**（`PythonRecipe`、`_host_recipe.pip`、`ctx.get_python_install_dir`） |
-| **APK 实际构建成功** | ❌ **未实测** —— 无 Linux 环境 |
+| CI 的 staging 步骤（把 jmcore 放进 gui/） | ✅ CI 已通过 |
+| **APK 实际构建成功** | ❌ **未成功** —— CI 在 SDK build-tools 处失败 |
 | **APK 在真机运行** | ❌ **未实测** |
 
-也就是说：**recipe 和配置是按官方源码写的，但没跑过一次真实的 APK 构建**。
-第一次构建如果失败，请把 `buildozer` 的完整输出贴出来，尤其是 `.buildozer/android/platform/build-*/build.log` 的尾部。
-CI 里已经配置了「失败时打印日志尾部」，所以走 GitHub Actions 最容易定位问题。
+### CI 目前卡在哪
+
+`.github/workflows/android.yml` 已经能跑通依赖安装、staging、SDK 拉取，
+但在真正编译 APK 时报：
+
+```
+# build-tools folder not found .../android-sdk/build-tools
+# Aidl not found, please install it.
+```
+
+buildozer 下载的 SDK 里缺 build-tools。workflow 里已经加了用 sdkmanager 补装
+`build-tools;34.0.0` 的步骤，但 sdkmanager 的实际路径随 buildozer 版本变化，探测没命中。
+
+**所以现在最可靠的路径是在 WSL2 里本地构建**（方法 1）。本地能看到实时输出，
+补装 SDK 组件也很直接：
+
+```bash
+SDK=$HOME/.buildozer/android/platform/android-sdk
+find "$SDK" -name sdkmanager -type f          # 找到真实路径
+"$SDKMGR" "build-tools;34.0.0" "platforms;android-34" "platform-tools"
+buildozer android debug
+```
+
+第一次构建要 30–60 分钟（下载 NDK 并编译 Python），之后就快了。
+构建失败请把 `buildozer` 的完整输出、尤其是
+`.buildozer/android/platform/build-*/build.log` 的尾部贴出来。
