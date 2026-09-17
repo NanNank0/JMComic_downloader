@@ -172,6 +172,17 @@ def build_args(args) -> list:
         "--exclude-module", "pytest",
         "--exclude-module", "IPython",
         "--exclude-module", "tkinter",
+        # Collecting kivy.core.window forces PyInstaller's isolated analysis child to
+        # import it, which needs a display/GL context. On a headless CI container that
+        # child dies (SubprocessDiedError, exit code 102) or leaves the bundle without
+        # PyInstaller's own bootstrap module ("No module named pyimod02_importers").
+        # Kivy's window providers are loaded at runtime through its own core-selector,
+        # so they do not need to be statically analysed: the SDL2 providers are
+        # gathered by hook-kivy.py, and the rest are genuinely unused here.
+        "--exclude-module", "kivy.core.window.window_x11",
+        "--exclude-module", "kivy.core.window.window_egl_rpi",
+        "--exclude-module", "kivy.core.window.window_sdl3",
+        "--exclude-module", "kivy.core.window.window_wayland",
     ]
 
     if args.icon:
