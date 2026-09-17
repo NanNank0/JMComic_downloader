@@ -157,17 +157,20 @@ xcrun stapler staple dist/jmcomic-downloader.dmg
 
 ## 用 GitHub Actions 构建
 
-`.github/workflows/desktop.yml`：
+`.github/workflows/desktop.yml` 现在覆盖全部四个平台：
 
 | Job | 产出 | 说明 |
 |---|---|---|
-| `smoke` | 无 | 字节编译 + 引擎无 GUI 依赖断言 + 网页资源检查 + CLI JSON 契约 |
-| `linux` | `jmcomic-linux` | Linux 文件夹包，并跑**冻结产物**的端到端测试 |
+| `smoke` | 无 | 字节编译 + 引擎无 GUI 依赖断言 + 网页资源检查 + CLI JSON 契约 + **两个 Android 依赖规则测试** |
+| `linux` | `jmcomic-linux` / `jmcomic-linux-x86_64.tar.gz` | Linux 文件夹包，并跑**冻结产物**的端到端测试 |
+| `windows` | `jmcomic-windows` / `jmcomic-windows-x64.zip` | Windows exe，同样跑冻结产物端到端测试 |
 | `macos` | `jmcomic-macos.zip` | `.app` 打包成 zip，同样跑端到端测试 |
+
+打 tag 时四个平台（加上 `.github/workflows/android.yml` 的 APK）都会把产物挂到 Release。
 
 触发方式：打 tag 自动跑，或在 Actions 页面手动 Run workflow。
 
-> 这些 job 现在**不安装 Kivy、不需要 xvfb、不需要 SDL**。这正是换掉原生 GUI 带来的好处：
+> 这些 job **不安装 Kivy、不需要 xvfb、不需要 SDL**。这正是换掉原生 GUI 带来的好处：
 > 之前 macOS job 一直卡在 Kivy 让 PyInstaller 去 import `kivy.core.window`（无显示环境直接死），
 > 现在这条路径根本不存在了。
 
@@ -175,16 +178,17 @@ xcrun stapler staple dist/jmcomic-downloader.dmg
 
 ## 验证状态（诚实说明）
 
-开发环境是 Windows，所以各平台实测情况：
-
 | 项目 | 状态 |
 |---|---|
 | 引擎无 GUI/终端依赖 | ✅ 已实测（CI 里也断言了） |
 | 网页界面：本地服务 + API + SSE | ✅ **已实测**（源码级端到端：16 张图 + PDF） |
 | CLI JSON 契约不变 | ✅ 已实测 |
-| **Windows 打包 + 冻结产物端到端** | ✅ **已实测**（onedir 9.8 MB / onefile 49.6 MB，Python 3.14，无 Kivy） |
-| **Linux 构建** | ✅ **CI 全绿**（`linux bundle` job，含冻结产物端到端测试） |
-| **macOS 构建** | ✅ **CI 全绿**（`macos app` job，产出并校验 `.app`） |
+| 省略 pyyaml 后仍能下载 | ✅ **已实测**（`tests/test_no_yaml.py`） |
+| **Windows 打包 + 冻结产物端到端** | ✅ **本机实测**（onedir 9.8 MB / onefile 49.6 MB，Python 3.14，无 Kivy） |
+| **Linux 构建** | ✅ **CI 全绿**（含冻结产物端到端测试） |
+| **Windows 构建** | ✅ **CI 全绿** |
+| **macOS 构建** | ✅ **CI 全绿**（产出并校验 `.app`） |
+| **Android APK** | ✅ **CI 产出**（32 MB，已挂到 Release）；真机运行待你验证，见 ANDROID.md |
 | AppImage / deb / dmg | ❌ 未实测，命令按官方文档写 |
 
 ### macOS 曾经失败的两个原因（都已修）

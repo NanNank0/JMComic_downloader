@@ -218,136 +218,120 @@ WebView 加载的是固定地址 `http://127.0.0.1:5000/`，**没有 query strin
 | `requests` 后端能完整下载 | ✅ **已实测**（Windows，16 张图） |
 | 网页界面与控制逻辑 | ✅ **已实测**（本地服务 + API + SSE 端到端） |
 | `jmcore` 无 GUI 依赖 | ✅ **已实测** |
+| 省略 pyyaml 后仍能正常下载 | ✅ **已实测**（`tests/test_no_yaml.py` 屏蔽 yaml 后完成真实下载） |
 | p4a recipe 类 API 与基类匹配 | ✅ **已核对源码**（`PythonRecipe`、`_host_recipe.pip`、`ctx.get_python_install_dir`） |
 | p4a `webview` bootstrap 的端口约定 | ✅ **已核对源码**（默认 5000，加载 `http://127.0.0.1:PORT/`） |
-| Android SDK / build-tools 就位 | ✅ **CI 已验证**（`build-tools: 34.0.0 37.0.0`，`platforms: android-34`） |
-| p4a 的 pip 不兼容已解决 | ✅ **CI 已验证**（`BuildDependencyInstallError` 报错消失） |
-| **APK 实际构建成功** | ❌ **仍未成功** —— 当前卡在 `Auto module resolution failed` |
-| **APK 在真机运行** | ❌ **未实测** |
+| Android SDK / build-tools 就位 | ✅ **CI 已验证**（`build-tools: 34.0.0 37.0.0`） |
+| p4a 与新版 pip 不兼容 | ✅ **CI 已验证**（`BuildDependencyInstallError` 消失） |
+| 依赖解析（`Auto module resolution`） | ✅ **CI 已验证**（去掉 pyyaml 后通过） |
+| **APK 构建成功** | ✅ **CI 已产出** |
+| **APK 在真机运行** | ❌ **未实测** —— 开发机为 Windows，无法安装验证 |
 
-### 已经解决的两个 Android 构建障碍
+### APK 产出的证据
 
-**① SDK 里没有 build-tools**
-
-报错：
-
-```
-# build-tools folder not found .../android-sdk/build-tools
-# Aidl not found, please install it.
-```
-
-两个原因叠加：
-
-- buildozer 装的是 2021 年的 cmdline-tools（`commandlinetools-linux-6514223`），
-  它的 `sdkmanager` 依赖 Java 11 起被移除的 JAXB 类，**在 JDK 17 下直接失效**，
-  于是什么都装不上。修法：CI 预装当前版 cmdline-tools，并按 buildozer 期望的旧布局
-  建 `tools/bin/sdkmanager` 符号链接（见 `android.py` 的 `sdkmanager_path`）。
-- buildozer 会在状态匹配时**直接跳过** SDK 安装：
-
-  ```python
-  cache_key = 'android:sdk_installation'
-  if self.buildozer.state.get(cache_key, None) == cache_value:
-      return True          # ← build-tools 永远不会被安装
-  ```
-
-  而 CI 缓存了 `.buildozer`，把「已安装」的状态一起还原了。修法：构建前删除
-  `.buildozer/state.db`。
-
-**② p4a 与新版 pip 不兼容**
-
-报错：
+GitHub Actions 的 `android` workflow 在 tag `v1.3.0` 上是全绿的：
 
 ```
-ImportError: cannot import name 'BuildDependencyInstallError' from 'pip._internal.exceptions'
-  (.../build/venv/lib/python3.14/site-packages/pip/...)
+[success] Build APK (debug)
+[success] Upload APK
+[success] Attach APK to the release
 ```
 
-p4a 的代码 `from pip._internal.exceptions import BuildDependencyInstallError`，
-而该名字已被新版 pip 移除；p4a 又会在自己的构建 venv 里执行 `pip install -U pip`，
-所以必然崩在 import 上。
+产物：artifact `jmcomic-apk` **32.06 MB**；Release 附件
+`jmcomicdownloader-1.0.0-arm64-v8a_armeabi-v7a-debug.apk` **32.15 MB**。
 
-注意：**升级 pip 安装的 p4a 没用**——buildozer 实际运行的是它自己 git clone 到
-`.buildozer/android/platform/python-for-android` 的那份副本（默认 `master`），
-而该副本会被项目缓存还原。正确修法是在 `buildozer.spec` 里加：
+### 装到手机上怎么验证（需要你做）
 
-```ini
-p4a.branch = develop
-```
-
-buildozer 的 `_install_p4a` 会读 `app.p4a.branch`，并在缓存的 clone 分支与配置不一致时
-重新 clone/checkout。已核对 develop 源码不再引用该名字。
-
-### 当前卡在哪
-
-`buildozer android debug` 现在能跑完 SDK 阶段和 p4a 启动，但在 `p4a create` 阶段失败：
-
-```
-[WARNING]: Auto module resolution failed:
-```
-
-这**不是** recipe 写错，而是 p4a 的依赖解析机制。读 p4a 的 `build.py` 可以看到：对每个
-**没有 recipe** 的 requirement，它会跑
-
-```
-pip install <包> --dry-run --only-binary=:all: --platform=android_24_arm64_v8a ...
-```
-
-`--only-binary=:all:` 要求**只用 wheel**。纯 Python wheel（`*-py3-none-any.whl`）能匹配
-任意平台标签，所以没问题；而**只有平台专属 wheel 的 C 扩展**（例如 `pyyaml`）既没有
-`android_*` wheel，也没有纯 Python wheel，这一步必然失败——报错却只有一句
-`Auto module resolution failed`，完全看不出是哪个包。
-
-**`pyyaml` 就是元凶**：PyPI 上 72 个 wheel，**没有一个是纯 Python 的**，p4a 也没有它的 recipe。
-
-#### 为什么可以直接去掉 pyyaml
-
-PyYAML 在这个项目里**只被惰性 import，而且只在本 App 不会走的代码路径上**（已读源码确认）：
-
-| 位置 | 语境 |
-|---|---|
-| `common/base/packer.py:63/67/75/80` | 都在 `YmlPacker` 的方法内部 —— 只有读写 YAML option 文件才会用到 |
-| `jmcomic/jm_option.py:353` | 在 `_migrate_zip_level` 内部嵌套的 `log_advice()` 里 —— 只有配置里残留旧的 `zip: level:` 才会触发 |
-
-Android 界面只做「输入车号 → 下载」，它用 `JmOption.default()` 构造配置，
-**从不读取 YAML 文件**，所以这两条路径都不会进入。
-
-于是 `buildozer.spec` 的 requirements 和 `recipes/jmcomic` 的 `depends` 里都删掉了 `pyyaml`。
-
-#### 这条规则现在有测试守着
-
-两个测试直接编码了上面的结论，都在普通 CI（无需 Android 工具链）里跑：
-
-| 测试 | 作用 |
-|---|---|
-| `tests/test_android_requirements.py` | 遍历 buildozer.spec 的 requirements 与 recipe 的 depends，要求每个包**要么有 p4a recipe，要么有纯 Python wheel**；否则失败并给出修法。它会明确点出 `pyyaml` 这类包 |
-| `tests/test_no_yaml.py` | 用 import hook **屏蔽 `yaml`**，然后跑一次真实下载，证明省略 pyyaml 是安全的 |
-
-`test_android_requirements.py` 在修复前会失败并报出：
-
-```
-FAIL  pyyaml   pyyaml 6.0.3: 72 wheels but none pure-Python (no android_* wheel exists either)
-```
-
-`test_no_yaml.py` 在屏蔽 yaml 的情况下完成了一次真实下载：
-
-```
-yaml is blocked (simulating Android)
-jmcomic 2.7.7 imported without yaml
-download OK: images=16 files=16
-NO-YAML TEST: PASS
-```
-
-**如果以后真的需要在 Android 上用 YAML**，两个办法：写一个 `recipes/pyyaml/`（PyYAML 的
-`setup.py` 在找不到 libyaml 时会退化为纯 Python 实现），或者把调用点换成 `ruamel.yaml`
-——p4a **有** `ruamel.yaml` 的 recipe。
-
-**建议下一步**：如果这次改完仍有问题，在 WSL2 里本地构建最快：
+APK 是 **debug 签名**，可以直接装：
 
 ```bash
-python gui/build_android.py debug        # 失败时 bin/ 下没有 apk，控制台有完整日志
-buildozer -v android debug 2>&1 | tail -n 120
+adb install -r jmcomicdownloader-1.0.0-arm64-v8a_armeabi-v7a-debug.apk
+adb logcat -s python:D          # 看 Python 侧输出
 ```
 
-第一次构建要 30–60 分钟（下载 NDK 并编译 Python），之后就快了。
-构建失败请把 `buildozer` 的完整输出、尤其是
-`.buildozer/android/platform/build-*/build.log` 的尾部贴出来。
+装好后应该看到：App 启动 → 内置 WebView 打开界面（本地 5000 端口）→
+输入车号 → 开始下载 → 日志区出现进度。
+
+**如果启动即闪退**，看 logcat 里的 Python 报错。最可能的两种情况：
+
+1. **`jmcore` 没打进 APK** —— 确认构建时跑过 `gui/build_android.py prepare`
+   （它会把 `scripts/jmcore.py` 暂存进 `webui/`）。CI 里这一步是有的。
+2. **WebView 连不上 5000 端口** —— 说明服务没起来。检查 Python 是否报错，
+   尤其是 `curl_cffi` 相关（不该出现，因为 Android 会自动用 `requests`）。
+
+**如果下载失败**，在界面里确认「HTTP 后端」显示 `requests`；再不行就配置代理。
+
+### 整条链路踩过并修好的 5 个障碍
+
+| # | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | `build-tools folder not found` / `Aidl not found` | buildozer 装的是 2021 年的 cmdline-tools，其 `sdkmanager` 依赖 Java 11 起被移除的 JAXB 类，在 JDK 17 下失效；且 buildozer 在状态匹配时会**跳过** SDK 安装，而 CI 缓存了那个状态 | CI 预装当前版 cmdline-tools，并按 buildozer 期望的旧布局建 `tools/bin/sdkmanager` 链接；构建前删 `.buildozer/state.db` |
+| 2 | `ImportError: cannot import name 'BuildDependencyInstallError'` | p4a 从 pip 内部导入已被新版 pip 移除的名字；p4a 又会在自己的 venv 里 `pip install -U pip` | `buildozer.spec` 里 `p4a.branch = develop`。**注意：升级 pip 装的 p4a 没用**，buildozer 跑的是它自己 git clone 的那份 |
+| 3 | `Auto module resolution failed` | p4a 对没有 recipe 的包跑 `pip install --only-binary=:all: --platform=android_*`；`pyyaml` 是 C 扩展，72 个 wheel 无一是纯 Python，也没有 `android_*` wheel | 从 requirements 与 recipe depends 中移除 pyyaml（其 import 全是惰性的、且在本 App 不走的路径上） |
+| 4 | 构建配置本身 | 界面从 Kivy 换成网页后，Android 侧要用 p4a 的 `webview` bootstrap，而不是 sdl2/kivy | `buildozer.spec` 设 `p4a.bootstrap = webview`，requirements 去掉 kivy、加上 pyjnius |
+| 5 | 端口与 token | WebView 加载的是固定地址 `http://127.0.0.1:5000/`，**没有 query string**，token 无法放 URL 里 | Android 上固定用 5000 端口；token 由服务端**注入页面**（`__TOKEN__` 占位符），API 请求仍带 token |
+
+其中第 3 条现在有测试守着：`tests/test_android_requirements.py` 会直接复刻 p4a 的 pip 解析，
+修复前它精确报出
+
+```
+ERROR: Could not find a version that satisfies the requirement pyyaml (from versions: none)
+```
+
+`tests/test_no_yaml.py` 则用 import hook 屏蔽 `yaml` 后跑一次真实下载，证明省略它是安全的。
+两个测试都接在普通 CI 的 smoke job 里，几秒钟就能跑完，不需要 Android 工具链。
+---
+
+## 附录：两个值得记住的内部细节
+
+### 为什么升级 pip 的 p4a 没用
+
+buildozer 实际运行的不是 pip 装的那个 p4a，而是它自己 git clone 到
+.buildozer/android/platform/python-for-android 的副本（默认 master），
+而这个副本会跟着 .buildozer 缓存一起被还原。所以修 p4a 版本要用：
+
+`ini
+p4a.branch = develop
+`
+
+buildozer 的 _install_p4a() 读 pp.p4a.branch，并在缓存副本的分支与配置不一致时
+重新 clone/checkout。（想要完全可复现，可以改用 p4a.commit 固定到某个 sha。）
+
+### 为什么删 buildozer 的状态文件
+
+buildozer 会在「状态看起来没变」时**直接跳过**整个 SDK 安装：
+
+`python
+# buildozer/targets/android.py, _install_android_packages()
+cache_key = 'android:sdk_installation'
+if self.buildozer.state.get(cache_key, None) == cache_value:
+    return True          # ← build-tools 永远不会被安装
+`
+
+而 CI 缓存了 .buildozer，把「已安装」的状态一起还原了 —— 于是第一次失败之后，
+后续每次都在同一处失败。构建前 
+m -f .buildozer/state.db 可以强制重新检查。
+
+### 如果以后真的需要在 Android 上用 YAML
+
+两个办法：
+
+1. 写 
+ecipes/pyyaml/：PyYAML 的 setup.py 在找不到 libyaml 时会退化为纯 Python 实现；
+2. 把调用点换成 
+uamel.yaml —— p4a **有** 
+uamel.yaml 的 recipe。
+
+改完记得跑 python tests/test_android_requirements.py，它会用 p4a 同样的方式验证解析。
+
+### 想看完整构建日志
+
+本地构建（WSL2）能直接看到全部输出：
+
+`ash
+python gui/build_android.py debug
+buildozer -v android debug 2>&1 | tail -n 120
+`
+
+CI 上失败时，.github/workflows/android.yml 的诊断步骤会把 SDK 布局和 p4a 的真实报错
+提取成注解，不需要下载日志。

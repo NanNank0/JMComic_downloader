@@ -130,6 +130,64 @@ jobs:
           path: dist/jmcomic-downloader/
           if-no-files-found: error
 
+      - name: Package for release
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          cd dist
+          tar -czf jmcomic-linux-x86_64.tar.gz jmcomic-downloader
+          ls -lh jmcomic-linux-x86_64.tar.gz
+
+      - name: Attach Linux build to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/jmcomic-linux-x86_64.tar.gz
+          fail_on_unmatched_files: false
+
+  windows:
+    name: windows exe
+    runs-on: windows-latest
+    needs: smoke
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install jmcomic requests img2pdf pillow pyinstaller
+
+      - name: Build
+        # --onedir: a one-file build re-extracts ~50 MB on every launch.
+        run: python gui/build.py --onedir --console
+
+      - name: Verify the frozen bundle serves the UI and downloads
+        continue-on-error: true
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python tests/test_frozen.py "dist/jmcomic-downloader/jmcomic-downloader.exe"
+
+      - name: Zip for release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: Compress-Archive -Path dist/jmcomic-downloader/* -DestinationPath dist/jmcomic-windows-x64.zip
+
+      - name: Upload Windows bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: jmcomic-windows
+          path: dist/jmcomic-windows-x64.zip
+          if-no-files-found: error
+
+      - name: Attach Windows build to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/jmcomic-windows-x64.zip
+          fail_on_unmatched_files: false
+
   macos:
     name: macos app
     runs-on: macos-14

@@ -57,12 +57,19 @@
 
 | 平台 | 产物 | 状态 |
 |---|---|---|
-| **Windows** | `jmcomic-downloader.exe`（单文件） | ✅ 已实测（打包 + 页面 + 真实下载） |
-| **Linux** | `jmcomic-linux.tar.gz` | ⚠️ CI 构建已通过，**待真机运行验证** |
-| **macOS** | `jmcomic-macos.zip`（内含 `.app`） | ⚠️ 待 CI 验证 |
-| **Android** | `jmcomic-downloader-*.apk` | ⚠️ 构建配置已完成，**待真实构建验证** |
+| **Windows** | `jmcomic-windows-x64.zip` | ✅ 本机实测（打包 + 页面 + 真实下载） |
+| **Linux** | `jmcomic-linux-x86_64.tar.gz` | ✅ CI 构建 + 冻结产物端到端通过 |
+| **macOS** | `jmcomic-macos.zip`（内含 `.app`） | ✅ CI 构建通过（未签名，见下） |
+| **Android** | `jmcomicdownloader-*.apk`（约 32 MB） | ✅ CI 构建产出 APK，**未在真机验证** |
 
-> 标 ⚠️ 的平台是因为开发机是 Windows，无法在本机构建。详见 [PACKAGING.md](PACKAGING.md) 和 [ANDROID.md](ANDROID.md) 的「验证状态」一节。
+四端都由 GitHub Actions 自动构建，打 tag 时会把产物挂到 Release。
+
+> **macOS 未签名**：Gatekeeper 会拦截，用户需先执行
+> `xattr -dr com.apple.quarantine JMComic下载器.app`（详见 [PACKAGING.md](PACKAGING.md)）。
+>
+> **Android APK 尚未在真机运行过**：开发机是 Windows，无法本地构建或安装 APK。
+> 构建链路已全部打通并产出可下载的 APK，但"装到手机上能用"这一步需要你实测——
+> 验证步骤见 [ANDROID.md](ANDROID.md)。
 
 ---
 
