@@ -26,6 +26,7 @@ On desktop this file is harmless and unused - `webui/server.py` is the normal en
 from __future__ import annotations
 
 import sys
+import threading
 import traceback
 from pathlib import Path
 
@@ -55,7 +56,6 @@ try:
           f"backend={jmcore.default_http_backend()}", flush=True)
     # Printed so a device-side failure report shows exactly which signal matched.
     print(f"[jmcomic] android signals: {jmcore.android_signals()}", flush=True)
-    print(f"[jmcomic] default download dir: {jmcore.default_download_dir()}", flush=True)
 
     # MUST run on this (main) thread: p4a patches ctypes.util to import the `android`
     # module, which needs the Activity's ClassLoader - available here, but not on the
@@ -66,13 +66,35 @@ try:
     # exists if the build included the `libwebp` recipe (see buildozer.spec). Without
     # it every download "succeeds" and then fails to decode, so print the truth here.
     print(f"[jmcomic] {jmcore.pillow_codecs()}", flush=True)
+
+    # Where do downloads go? p4a's default (<ANDROID_PRIVATE>) is invisible to every
+    # file manager and to USB/MTP, so prefer the app's EXTERNAL files directory, which
+    # needs no permission and the user can actually open. Must also run on this thread:
+    # it is the one jnius caller, and PythonActivity is an app class.
+    print(f"[jmcomic] storage probe: {jmcore.android_storage_probe()}", flush=True)
+    print(f"[jmcomic] default download dir: {jmcore.default_download_dir()}", flush=True)
 except Exception:
     # Not fatal for serving the UI, but worth seeing in logcat.
     print("[jmcomic] WARNING: jmcore probe failed", flush=True)
     traceback.print_exc()
 
 
+def _migrate_existing_downloads() -> None:
+    """
+    Move albums downloaded by older versions into the now-browsable directory.
+
+    Runs off the main thread because `serve()` never returns and a large old download
+    directory must not delay the UI. It is pure file I/O - no jnius - so that is safe.
+    """
+    try:
+        print(f"[jmcomic] migrate: {jmcore.migrate_downloads()}", flush=True)
+    except Exception:
+        print("[jmcomic] migrate failed", flush=True)
+        traceback.print_exc()
+
+
 def main() -> int:
+    threading.Thread(target=_migrate_existing_downloads, daemon=True).start()
     # quiet=True: there is no console; the banner would go nowhere useful.
     # open_browser=False: the WebView is the UI.
     return server.serve(port=server.ANDROID_WEBVIEW_PORT, open_browser=False, quiet=True)

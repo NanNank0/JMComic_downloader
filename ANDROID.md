@@ -238,6 +238,7 @@ WebView 加载的是固定地址 `http://127.0.0.1:5000/`，**没有 query strin
 | APK 装了但下载失败 | 检查是否走了 `curl_cffi` 后端。网页界面里「HTTP 后端」应显示 `requests` |
 | 图片**全部**下载失败，异常是 `cannot identify image file` | Pillow 缺 WebP 编解码器（构建期决定）。见「七、Pillow 的 WebP 编解码器」。`adb logcat -s python:D` 里的 `[jmcomic] Pillow ... webp=NO` 可直接确认 |
 | 日志里 50 张图全部 `图片准备下载` 成功、却全部 `图片下载失败` | 同上：HTTP 是成功的，失败在解码。网络/代理/后端都不是原因 |
+| **提示下载完成，但手机里找不到文件** | 旧版本保存在应用私有目录（文件管理器看不到）。见「八、下载的文件在哪里」。从 v1.3.9 起默认保存到可见的 `Android/data/io.github.nannank0.jmcomicdownloader/files/downloads/` |
 
 ---
 
@@ -259,7 +260,8 @@ WebView 加载的是固定地址 `http://127.0.0.1:5000/`，**没有 query strin
 | 依赖解析（`Auto module resolution`） | ✅ **CI 已验证**（去掉 pyyaml 后通过） |
 | APK 内含 Pillow 的 WebP 编解码器 | ✅ **CI 已验证**（`gui/verify_apk.py` 直接读 APK，断言 `PIL/_webp*.so` 存在且所有原生依赖可解析） |
 | **APK 构建成功** | ✅ **CI 已产出** |
-| **APK 在真机运行** | ⚠️ **部分实测（用户真机 v1.3.7）**：App 启动、内置 WebView 界面、本子信息/章节/图片地址全部正常，50 张图的 HTTP 请求全部成功；但**解码 100% 失败**（缺 WebP 编解码器）。该问题已修，见「七」——**修复后的包仍待真机复测** |
+| **APK 在真机运行** | ✅ **已实测（用户真机 v1.3.8）**：App 启动、内置 WebView 界面、本子信息/章节/50 张图下载与 WebP 解码全部正常 |
+| **下载文件的可见性** | ✅ **已实测（同上）**：截图/反馈确认"下载完成"；但 v1.3.8 及以前落在应用私有目录，用户在任何文件管理器里都找不到 —— v1.3.9 改为外部目录，见「八」 |
 
 ### APK 产出的证据
 
@@ -468,6 +470,78 @@ soname"），所以 `libwebp` 虽然声明了 `SOVERSION 8.0.1`，构建出来�
 - **真机可查**：启动时 logcat 会多打一行
   `[jmcomic] Pillow 11.3.0 webp=yes jpg=yes zlib=yes ...`，
   以后遇到解码类问题，一行就能定位。
+
+---
+
+## 八、下载的文件在哪里（Android 存储）
+
+### 为什么 v1.3.8 及以前"下载成功却找不到文件"
+
+默认保存目录是 p4a 给的应用私有目录：
+
+```
+/data/user/0/io.github.nannank0.jmcomicdownloader/files/downloads
+```
+
+这个路径**真实可写**，下载确实成功了 —— 但任何文件管理器、USB/MTP、以及不带 `run-as`
+的 `adb pull` **都看不到它**（应用沙箱内部，只有 root 或应用自己可读）。用户视角就是
+"提示下载好了，但文件不见了"。这是默认值选错了，不是用户操作问题。
+
+### 现在的默认目录（v1.3.9 起）
+
+```
+手机存储/Android/data/io.github.nannank0.jmcomicdownloader/files/downloads/
+```
+
+这是应用的**外部**目录（`Context.getExternalFilesDir(null)`）：
+
+- 任何 Android 版本都**不需要权限**，普通 `open()` 就能写；
+- 文件管理器（MIUI/ColorOS/EMUI 自带的、MT 管理器等）能直接进去；
+- 插 USB 到电脑也能看到（`内部存储/Android/data/...`），可以直接拷出来。
+
+实现见 `jmcore.android_storage_probe()`：在**主线程**调用一次 jnius 的
+`getExternalFilesDir(None)`（`org.kivy.android.PythonActivity` 是应用类，只能主线程解析
+—— 与 `ensure_ctypes_util_importable()` 同一个坑），然后对每个候选目录做**真实写入测试**，
+只接受真写得进去的；全都失败就退回私有目录，并在日志里明确写出"用户看不到"。
+
+升级时还会把旧版本写在私有目录里的东西搬到新目录：
+`jmcore.migrate_downloads()`（后台线程、纯文件操作、目标已存在则不覆盖）。
+
+logcat 里对应两行：
+
+```
+[jmcomic] storage probe: /storage/emulated/0/Android/data/io.github.nannank0.jmcomicdownloader/files/downloads (via Activity.getExternalFilesDir()) - browsable
+[jmcomic] migrate: /data/user/0/io.github.nannank0.jmcomicdownloader/files/downloads -> /storage/emulated/0/.../downloads: moved=3 skipped=0 failed=0
+```
+
+### 怎么在手机上找到文件
+
+1. 文件管理器 → `Android/data/io.github.nannank0.jmcomicdownloader/files/downloads/`
+2. 或者插 USB 到电脑 → `内部存储/Android/data/io.github.nannank0.jmcomicdownloader/files/downloads/`
+3. 应用界面里那行「默认保存到 …」显示的路径就是它
+
+### 把旧版本已经下好的文件取出来（需要 adb）
+
+```bash
+# 1) 私有目录里有什么（debug 签名 + debuggable 的包才能用 run-as）
+adb shell run-as io.github.nannank0.jmcomicdownloader ls -R files/downloads
+
+# 2) 打包取到电脑。cmd /c 是为了让重定向按字节写，PowerShell 的 > 会破坏二进制
+cmd /c "adb exec-out run-as io.github.nannank0.jmcomicdownloader tar -cf - files/downloads > jm-downloads.tar"
+tar -xf jm-downloads.tar
+
+# 3) 如果想直接放到手机的可见目录里（应用自己的外部目录可写）
+adb shell run-as io.github.nannank0.jmcomicdownloader sh -c \
+  "mkdir -p /sdcard/Android/data/io.github.nannank0.jmcomicdownloader/files/downloads && \
+   cp -r files/downloads/. /sdcard/Android/data/io.github.nannank0.jmcomicdownloader/files/downloads/"
+```
+
+### 还没做、可能下一步做的
+
+现在用的是应用外部目录。如果你的手机连 `Android/data` 都在文件管理器里被藏起来
+（部分原生 Android / 某些 ROM 会），下一步可以用 **MediaStore** 把导出的文件写进公开的
+`下载/JMComic/`：Android 10+ 同样不需要任何权限，但需要逐文件 insert + 拷贝（会多一份
+拷贝，且要写 jnius 代码）。需要的话再开。
 
 ---
 

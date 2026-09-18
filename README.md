@@ -60,16 +60,17 @@
 | **Windows** | `jmcomic-windows-x64.zip` | ✅ 本机实测（打包 + 页面 + 真实下载） |
 | **Linux** | `jmcomic-linux-x86_64.tar.gz` | ✅ CI 构建 + 冻结产物端到端通过 |
 | **macOS** | `jmcomic-macos.zip`（内含 `.app`） | ✅ CI 构建通过（未签名，见下） |
-| **Android** | `jmcomicdownloader-*.apk`（约 32 MB） | ✅ CI 构建产出 APK，**未在真机验证** |
+| **Android** | `jmcomicdownloader-*.apk`（约 35 MB） | ✅ 真机实测：界面、元数据、图片下载与解码全部正常 |
 
 四端都由 GitHub Actions 自动构建，打 tag 时会把产物挂到 Release。
 
 > **macOS 未签名**：Gatekeeper 会拦截，用户需先执行
 > `xattr -dr com.apple.quarantine JMComic下载器.app`（详见 [PACKAGING.md](PACKAGING.md)）。
 >
-> **Android APK 尚未在真机运行过**：开发机是 Windows，无法本地构建或安装 APK。
-> 构建链路已全部打通并产出可下载的 APK，但"装到手机上能用"这一步需要你实测——
-> 验证步骤见 [ANDROID.md](ANDROID.md)。
+> **Android 下载的文件在哪**：保存在
+> `手机存储/Android/data/io.github.nannank0.jmcomicdownloader/files/downloads/`，
+> 用文件管理器或插 USB 到电脑都能看到（不要用应用私有目录，那个用户看不到）。
+> 细节见 [ANDROID.md](ANDROID.md)。
 
 ---
 

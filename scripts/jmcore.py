@@ -2,19 +2,23 @@
 """
 jmcore - the platform-independent JMComic download engine.
 
-`jmctl.py` (CLI), `gui/app.py` (tkinter) and `gui/kivy_app.py` (Kivy, used on
-Android/Linux/macOS) are all thin front ends over this module. Everything here is
-importable without a GUI toolkit and without a terminal, which is what makes the
-Android build possible: Kivy apps have neither.
+Three front ends are thin layers over this module: `jmctl.py` (the JSON CLI),
+`webui/` (the same local web UI on every platform, including the Android WebView) and
+the packaged desktop/Android bundles. Nothing here needs a GUI toolkit or a terminal,
+which is what makes both the frozen desktop builds and the Android build possible.
 
 Android-specific note
 ---------------------
 `jmcomic` declares `curl-cffi` as a hard dependency, but python-for-android has no
 recipe for it. curl-cffi exists to impersonate a browser's TLS fingerprint, and the
-JM endpoints do not require it — verified by downloading a full chapter through the
+JM endpoints do not require it - verified by downloading a full chapter through the
 pure-Python `requests` backend. So on Android we select that backend and let the
 packaging step install jmcomic with `--no-deps`. `curl_cffi` is imported lazily by
 commonX, so as long as the requests backend is used it is never touched.
+
+Two Android traps documented at their implementations below, because both cost a real
+debugging round: `ensure_ctypes_util_importable()` (main-thread JNI warm-up) and
+`android_storage_probe()` (the app-private download directory is invisible to users).
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -464,22 +469,188 @@ def default_download_dir() -> Path:
     """
     A sensible per-platform default download location.
 
-    On Android the app's writable root is found from p4a's env vars. The `webview`
-    bootstrap does not set ANDROID_PRIVATE, so fall back to the app directory's parent
-    (the APK's private files dir, which the app owns) rather than to Path.home(), which
-    is not reliably writable on Android.
+    On Android this prefers the app's EXTERNAL files directory
+    (`<external>/Android/data/<package>/files/downloads`), which needs no permission
+    and is browsable from a file manager and over USB, over the app-private
+    `/data/user/0/<package>/files/downloads`, which no file manager can ever show.
+    See `android_storage_probe()`, which must run first and on the main thread.
     """
     if is_android():
-        for key in ("ANDROID_PRIVATE", "ANDROID_APP_PATH"):
-            base = os.environ.get(key)
-            if base:
-                return Path(base) / "downloads"
-        # server.py lives in the app dir (<files>/app), whose parent is writable.
-        try:
-            return Path(__file__).resolve().parent.parent / "downloads"
-        except Exception:
-            return Path(os.getcwd()) / "downloads"
+        if _ANDROID_EXTERNAL_ROOT is not None:
+            return _ANDROID_EXTERNAL_ROOT / "downloads"
+        return _android_private_root() / "downloads"
     return Path.home() / "Downloads" / "JMComic"
+
+
+# --------------------------------------------------------------------------- #
+# Android storage: downloads must land somewhere the user can actually find
+# --------------------------------------------------------------------------- #
+
+# Set once by android_storage_probe() (main thread only) to the app's EXTERNAL files
+# directory. Everything under `<ANDROID_PRIVATE>` - the default p4a gives us - is
+# unreadable for every file manager, for USB/MTP and for `adb pull` without run-as, so
+# a download that "succeeds" there is effectively lost from the user's point of view.
+_ANDROID_EXTERNAL_ROOT: Optional[Path] = None
+
+
+def android_external_root() -> Optional[Path]:
+    """The external root chosen by android_storage_probe(), or None."""
+    return _ANDROID_EXTERNAL_ROOT
+
+
+def _android_private_root() -> Path:
+    """The app's private, non-browsable root (p4a's app files directory)."""
+    for key in ("ANDROID_PRIVATE", "ANDROID_APP_PATH"):
+        base = os.environ.get(key)
+        if base:
+            return Path(base)
+    # server.py lives in the app dir (<files>/app), whose parent is writable.
+    try:
+        return Path(__file__).resolve().parent.parent
+    except Exception:
+        return Path(os.getcwd())
+
+
+def _android_package_name() -> Optional[str]:
+    """
+    Dig the app's package name out of p4a's environment variables.
+
+    `/data/user/0/io.github.nannank0.jmcomicdownloader/files` -> the package name, which
+    is what the external files path is built from when jnius is not usable.
+    """
+    for key in ("ANDROID_PRIVATE", "ANDROID_APP_PATH", "ANDROID_ARGUMENT"):
+        value = os.environ.get(key) or ""
+        match = re.search(r"/data/(?:user/\d+|data)/([^/]+)", value)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _jnius_external_files_dir() -> Optional[str]:
+    """
+    `Context.getExternalFilesDir(null)` - the authoritative answer, but jnius and
+    therefore MAIN-THREAD ONLY: `org.kivy.android.PythonActivity` is an application
+    class, which only the Activity's ClassLoader can resolve. Called from a worker
+    thread, JNI's FindClass falls back to the system ClassLoader and raises
+    `ClassNotFoundException` (the same trap documented in
+    ensure_ctypes_util_importable()).
+    """
+    try:
+        from jnius import autoclass
+
+        activity = autoclass("org.kivy.android.PythonActivity").mActivity
+        if activity is None:
+            return None
+        directory = activity.getExternalFilesDir(None)
+        return str(directory.getAbsolutePath()) if directory is not None else None
+    except Exception:
+        return None
+
+
+def _writable_directory(path: Path) -> bool:
+    """True only when we can really create the directory and write inside it."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".jmcomic-write-test"
+        probe.write_bytes(b"ok")
+        probe.unlink()
+        return True
+    except Exception:
+        return False
+
+
+def _candidate_external_roots() -> List[tuple]:
+    """
+    External roots to try, best first, as (path, how-we-found-it) pairs.
+    """
+    candidates: List[tuple] = []
+
+    jnius_path = _jnius_external_files_dir()
+    if jnius_path:
+        candidates.append((Path(jnius_path), "Activity.getExternalFilesDir()"))
+
+    # Guessing is only meaningful on a real device: on Windows `Path("/sdcard/x")`
+    # silently means `C:\sdcard\x`, so that branch is deliberately POSIX-only.
+    if os.name == "posix":
+        package = _android_package_name()
+        if package:
+            for base in (os.environ.get("EXTERNAL_STORAGE"), "/sdcard",
+                         "/storage/emulated/0"):
+                if base:
+                    candidates.append(
+                        (Path(base) / "Android" / "data" / package / "files",
+                         f"{base}/Android/data/{package}/files"))
+
+    unique: List[tuple] = []
+    seen = set()
+    for root, how in candidates:
+        key = str(root)
+        if key not in seen:
+            seen.add(key)
+            unique.append((root, how))
+    return unique
+
+
+def android_storage_probe() -> str:
+    """
+    Pick a download root the user can actually reach, and report what happened.
+
+    Called once from the Android entry point, on the MAIN thread. Every candidate is
+    write-tested before it is trusted; falling back to the private directory keeps the
+    app working even when nothing else is writable.
+    """
+    global _ANDROID_EXTERNAL_ROOT
+
+    if not is_android():
+        return "not android"
+    if _ANDROID_EXTERNAL_ROOT is not None:
+        return f"already set: {_ANDROID_EXTERNAL_ROOT / 'downloads'}"
+
+    rejected = []
+    for root, how in _candidate_external_roots():
+        if _writable_directory(root / "downloads"):
+            _ANDROID_EXTERNAL_ROOT = root
+            return f"{root / 'downloads'} (via {how}) - browsable"
+        rejected.append(f"{root} ({how}) not writable")
+
+    detail = ("; ".join(rejected[:3]) + "; ") if rejected else ""
+    return (f"{detail}keeping app-private {_android_private_root() / 'downloads'}, "
+            f"which NO file manager can show")
+
+
+def migrate_downloads(source: Optional[Path] = None,
+                      target: Optional[Path] = None) -> str:
+    """
+    Move already-downloaded albums from the invisible private directory into the
+    browsable one, so upgrading does not look like the files were lost.
+
+    Pure file operations (no jnius), so it is safe to run off the main thread. Anything
+    already present at the destination is left untouched. Returns a log-ready report.
+    """
+    source = source if source is not None else _android_private_root() / "downloads"
+    target = target if target is not None else default_download_dir()
+
+    if source == target or not source.is_dir():
+        return f"nothing to migrate ({source})"
+
+    moved = skipped = failed = 0
+    try:
+        entries = sorted(source.iterdir())
+    except Exception as exc:
+        return f"cannot list {source}: {exc}"
+
+    for entry in entries:
+        destination = target / entry.name
+        if destination.exists():
+            skipped += 1
+            continue
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(entry), str(destination))
+            moved += 1
+        except Exception:
+            failed += 1
+    return f"{source} -> {target}: moved={moved} skipped={skipped} failed={failed}"
 
 
 # --------------------------------------------------------------------------- #
