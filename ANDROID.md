@@ -512,3 +512,77 @@ p4a.extra_args = --version=1.1.0
 
 如果哪天需要真正修掉，建议直接看 `buildozer android debug -v` 的完整命令列表，
 确认 `create` 到底有没有拿到版本、以及 manifest 是在哪一步被渲染的。
+
+### 已定位：真机 `JavaException: ClassNotFoundException org.kivy.android.PythonActivity`
+
+**客户端完整堆栈（决定性证据）：**
+
+```
+server.py:145 _run_job  ->  jmcore.py:688 run_download
+  -> jmcomic/api.py:101 download_album -> new_downloader -> create_client
+  -> jm_client_impl.py:1289 after_init -> ensure_have_cookies -> get_cookies
+  -> setting -> model_data -> res_data -> decoded_data
+  -> jm_toolkit.py:1246 decode_resp_data
+  -> Crypto/Cipher/AES.py:26  <module>
+  -> Crypto/Util/_raw_api.py:77    ImportError: CFFI with optimize=2 fails due to
+                                   pycparser bug.
+  -> Crypto/Util/_raw_api.py:173   （退回 ctypes 实现）
+  -> Lib/ctypes/util.py:11  <module>
+  -> android/__init__.py:8  <module>
+  -> android/_android.pyx:162
+  -> jnius/reflect.py:209 autoclass
+  -> JavaException: ClassNotFoundException: Didn't find class
+     "org.kivy.android.PythonActivity" on path: DexPathList[[directory "."], ...]
+```
+
+**完整因果链：**
+
+1. jmcomic 用 **PyCryptodome 的 AES** 解密 API 响应（`decode_resp_data`）。
+2. p4a 上 PyCryptodome 的 CFFI 后端不可用（`CFFI with optimize=2 ...`），于是**退回
+   ctypes 实现**，而这个实现会 `import ctypes.util`。
+3. p4a **给 CPython 打了补丁**，让 `ctypes/util.py` 一开头就是：
+
+   ```python
+   if True:
+       from android._ctypes_library_finder import find_library as _find_lib
+   elif os.name == "nt":
+       ...
+   ```
+
+   （见 p4a `recipes/python3/patches/cpython-311-ctypes-find-library.patch`）
+   所以**在 Android 上任何 `import ctypes.util` 都会连带导入 `android` 这个 Cython 模块**。
+4. `android` 模块经 jnius 调 `autoclass(...)`，而 jnius 取 App 的 ClassLoader 是通过
+   `org.kivy.android.PythonActivity`。
+5. **我们的下载跑在工作线程里**（`server._run_job` 是 `threading.Thread`）。在非 JVM 创建的
+   原生线程上，JNI 的 `FindClass` 用**系统类加载器**，其 dex 路径就是 `directory "."`
+   —— 于是找不到 App 里的 `PythonActivity`，抛出上面那个异常。
+
+**这也解释了为什么页面能打开、一点下载才炸**：页面/配置走主线程，JNI 用的是 App 的
+类加载器；下载走工作线程，就退化成了系统加载器。
+
+**修法**（`jmcore.ensure_ctypes_util_importable()`，在**主线程**调用）：
+
+1. 先在工作线程启动之前，于**主线程**把 `ctypes.util` 导入一次。Python 会缓存模块，
+   工作线程之后 `import ctypes.util` 变成 no-op，不再触发 `android`/jnius。
+   调用点在 `webui/main.py` 和 `server.serve()`（都在主线程）。
+2. 万一主线程上这个导入也失败，则安装一个**不依赖 JNI** 的
+   `android._ctypes_library_finder` 替身（用 stock CPython 在 Android 上的
+   `/system/lib{64}/lib*.so` 查找逻辑），并在日志里明确标注这是 workaround。
+
+**验证方式**：启动日志里现在会有
+
+```
+[jmcomic] ctypes.util: ctypes.util imported on the calling thread
+```
+
+或（走了替身时）
+
+```
+[jmcomic] ctypes.util: used a JNI-free ctypes.util shim because the real one failed ...
+```
+
+**教训**：我在这条问题上先后给出过两个**错误**的诊断 —— 「CI 缓存污染导致 versionName
+不更新」和「`is_android()` 调用了 `platform.platform()`」。两次都是只凭间接证据推断。
+真正定位靠的是**拿到完整堆栈**。以后遇到真机问题，先要完整 logcat，再下结论。
+（`is_android()` 不再使用 `platform` 模块这件事本身仍然是对的、被测试固定住了，
+只是它不是这个异常的原因。）

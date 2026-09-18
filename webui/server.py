@@ -377,10 +377,18 @@ def serve(port: int = 0, open_browser: bool = True, quiet: bool = False,
 
     android = jmcore.is_android()
     if android:
-        # On Android the UI is a WebView inside our own activity, not the user's
-        # browser, and p4a hardcodes the port it will load. Bind exactly that.
+        # On Android the webview bootstrap pings and loads a fixed port, and there is no
+        # external browser to open.
         port = port or ANDROID_WEBVIEW_PORT
         open_browser = False
+        # Warm up ctypes.util HERE, on the main thread. p4a patches it to import the
+        # `android` module, which needs the Activity's ClassLoader - unavailable on the
+        # download worker thread. Warming it up now means the worker's import is a no-op.
+        if not quiet:
+            print(f"[jmcomic] ctypes.util: {jmcore.ensure_ctypes_util_importable()}",
+                  flush=True)
+        else:
+            jmcore.ensure_ctypes_util_importable()
 
     token = secrets.token_urlsafe(24)
     try:

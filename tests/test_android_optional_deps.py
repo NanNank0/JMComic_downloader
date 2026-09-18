@@ -117,6 +117,74 @@ def check_detection_without_platform() -> bool:
             os.environ.pop("P4A_MINSDK", None)
 
 
+def check_ctypes_util_shim() -> bool:
+    """
+    `import ctypes.util` on a p4a app must not be able to kill a download thread.
+
+    p4a patches CPython's ctypes/util.py to begin with
+    `from android._ctypes_library_finder import find_library`, so importing it pulls in
+    the `android` Cython module -> jnius -> needs the Activity's ClassLoader. On a
+    worker thread JNI uses the system loader and raises ClassNotFoundException:
+    org.kivy.android.PythonActivity.
+
+    PyCryptodome imports ctypes.util when its CFFI backend is unusable (the case on p4a),
+    and jmcomic needs PyCryptodome for AES, so this is on our download path.
+
+    Simulates the failure by making `android` unimportable, then checks that
+    jmcore.ensure_ctypes_util_importable() still leaves `ctypes.util` usable.
+    """
+    print()
+    print("-- ctypes.util must survive an unimportable `android` module --")
+
+    import importlib
+    import sys
+
+    import jmcore
+
+    # Force the situation: no android module, and ctypes.util not yet imported.
+    saved_modules = {n: sys.modules.pop(n) for n in list(sys.modules)
+                     if n == "android" or n.startswith("android.")
+                     or n == "ctypes.util"}
+    blocked = ("android",)
+
+    class BlockAndroid(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname.split(".")[0] in blocked:
+                raise ImportError(f"blocked for this test: {fullname}")
+            return None
+
+    finder_block = BlockAndroid()
+    sys.meta_path.insert(0, finder_block)
+    try:
+        outcome = jmcore.ensure_ctypes_util_importable()
+        usable = "ctypes.util" in sys.modules
+        print(f"   outcome: {outcome}")
+        print(f"   ctypes.util importable afterwards: {usable}")
+        if not usable:
+            print("   FAIL: ctypes.util is still unusable, so downloads would crash")
+            return False
+        import ctypes.util  # noqa: F401  (must not raise)
+
+        print("   ctypes.util.find_library usable:", callable(ctypes.util.find_library))
+
+        # Exercise the fallback itself: it is the branch Android actually needs, and on
+        # this desktop host the direct import always succeeds, so it would go untested.
+        for name in ("android._ctypes_library_finder", "android"):
+            sys.modules.pop(name, None)
+        jmcore._install_android_ctypes_shim()
+        import android  # noqa: F401  (resolves to the shim)
+
+        finder = android._ctypes_library_finder.find_library
+        print(f"   shim installed; find_library('c') -> {finder('c')!r}")
+        if not callable(finder):
+            print("   FAIL: the shim did not provide a callable find_library")
+            return False
+        return True
+    finally:
+        sys.meta_path.remove(finder_block)
+        sys.modules.update(saved_modules)
+
+
 def main() -> int:
     # p4a sets these; jmcore.is_android() keys off them.
     private = tempfile.mkdtemp(prefix="jm-android-sim-")
@@ -140,6 +208,8 @@ def main() -> int:
         print("FAIL: is_android() is False, so this does not simulate a device")
         return 1
     if not check_detection_without_platform():
+        return 1
+    if not check_ctypes_util_shim():
         return 1
     print(f"is_android() = True, default backend = {jmcore.default_http_backend()}")
     if jmcore.default_http_backend() != jmcore.ANDROID_HTTP_BACKEND:

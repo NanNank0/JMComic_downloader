@@ -186,6 +186,108 @@ def _install_curl_cffi_stub() -> bool:
     return True
 
 
+def ensure_ctypes_util_importable() -> str:
+    """
+    Make `import ctypes.util` survivable, preferring to do it on the MAIN thread.
+
+    Why this is needed
+    ------------------
+    python-for-android patches CPython's `Lib/ctypes/util.py` so that it *starts* with:
+
+        if True:
+            from android._ctypes_library_finder import find_library as _find_lib
+            def find_library(name):
+                return _find_lib(name)
+        elif os.name == "nt":
+            ...
+
+    (see p4a's `recipes/python3/patches/cpython-311-ctypes-find-library.patch`). So on
+    Android ANY `import ctypes.util` imports the `android` Cython module, which goes
+    through jnius and needs the Activity's ClassLoader. From a plain Python worker
+    thread JNI resolves classes with the *system* loader, so it dies with:
+
+        JavaException: ClassNotFoundException:
+        Didn't find class "org.kivy.android.PythonActivity"
+        on path: DexPathList[[directory "."], ...]
+
+    And PyCryptodome imports `ctypes.util` whenever its CFFI backend is unusable - which
+    on p4a it is ("CFFI with optimize=2 fails due to pycparser bug") - while jmcomic
+    needs PyCryptodome (AES) to decode API responses. So the download path reaches that
+    import, and our downloads run on a worker thread.
+
+    Remedy, in order
+    ----------------
+    1. Import it now. Called from the main thread this succeeds, and because Python
+       caches modules the worker thread's later import is a no-op.
+    2. If even that fails, install a minimal `android._ctypes_library_finder`
+       replacement that searches the platform lib directories without JNI (the same
+       logic stock CPython uses on Android). This is logged loudly because it is a
+       workaround, not a fix.
+
+    Returns a human-readable description for logging. Safe to call anywhere and more
+    than once; a no-op off Android.
+    """
+    if not is_android():
+        return "not android; ctypes.util left alone"
+
+    import importlib
+
+    if "ctypes.util" in sys.modules:
+        return "ctypes.util already imported"
+
+    try:
+        importlib.import_module("ctypes.util")
+        return "ctypes.util imported on the calling thread"
+    except Exception as first_error:
+        reason = f"{type(first_error).__name__}: {first_error}"
+
+    # Fall back to a JNI-free find_library.
+    try:
+        _install_android_ctypes_shim()
+    except Exception as second_error:
+        return (f"FAILED to make ctypes.util importable "
+                f"(direct: {reason}; with shim: {type(second_error).__name__}: "
+                f"{second_error})")
+
+    return ("used a JNI-free ctypes.util shim because the real one failed on this "
+            f"thread ({reason})")
+
+
+def _install_android_ctypes_shim() -> None:
+    """
+    Replace `android._ctypes_library_finder` with a JNI-free implementation.
+
+    Only used when the real import failed. Provides the same `find_library` contract
+    that p4a's patched `ctypes/util.py` expects, using stock CPython's Android search
+    logic, and raises if `ctypes.util` still cannot be imported.
+    """
+    import importlib
+    import types
+
+    for name in ("android._ctypes_library_finder", "android"):
+        sys.modules.pop(name, None)
+
+    def _find_library_no_jni(name):
+        directory = "/system/lib"
+        try:
+            if "64" in os.uname().machine:
+                directory += "64"
+        except Exception:
+            pass
+        candidate = f"{directory}/lib{name}.so"
+        return candidate if os.path.exists(candidate) else None
+
+    package = types.ModuleType("android")
+    package.__path__ = []          # mark as a package so submodule import works
+    submodule = types.ModuleType("android._ctypes_library_finder")
+    submodule.find_library = _find_library_no_jni
+    package._ctypes_library_finder = submodule
+    sys.modules["android"] = package
+    sys.modules["android._ctypes_library_finder"] = submodule
+
+    importlib.import_module("ctypes.util")
+
+
 def load_jmcomic():
     """Import jmcomic, or raise a handled error explaining how to install it."""
     stubbed = _install_curl_cffi_stub()

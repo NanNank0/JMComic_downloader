@@ -53,10 +53,14 @@ try:
 
     print(f"[jmcomic] android={jmcore.is_android()} "
           f"backend={jmcore.default_http_backend()}", flush=True)
-    # Printed so a device-side failure report shows exactly which signal matched -
-    # the webview bootstrap does not set ANDROID_PRIVATE, unlike the sdl2/qt ones.
+    # Printed so a device-side failure report shows exactly which signal matched.
     print(f"[jmcomic] android signals: {jmcore.android_signals()}", flush=True)
     print(f"[jmcomic] default download dir: {jmcore.default_download_dir()}", flush=True)
+
+    # MUST run on this (main) thread: p4a patches ctypes.util to import the `android`
+    # module, which needs the Activity's ClassLoader - available here, but not on the
+    # worker thread that performs downloads. See the function's docstring.
+    print(f"[jmcomic] ctypes.util: {jmcore.ensure_ctypes_util_importable()}", flush=True)
 except Exception:
     # Not fatal for serving the UI, but worth seeing in logcat.
     print("[jmcomic] WARNING: jmcore probe failed", flush=True)
