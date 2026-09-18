@@ -183,7 +183,7 @@ xcrun stapler staple dist/jmcomic-downloader.dmg
 | 引擎无 GUI/终端依赖 | ✅ 已实测（CI 里也断言了） |
 | 网页界面：本地服务 + API + SSE | ✅ **已实测**（源码级端到端：16 张图 + PDF） |
 | CLI JSON 契约不变 | ✅ 已实测 |
-| 省略 pyyaml 后仍能下载 | ✅ **已实测**（`tests/test_no_yaml.py`） |
+| 缺 curl_cffi / pyyaml / img2pdf 时仍能下载并导出 PDF | ✅ **已实测**（`tests/test_android_optional_deps.py`） |
 | **Windows 打包 + 冻结产物端到端** | ✅ **本机实测**（onedir 9.8 MB / onefile 49.6 MB，Python 3.14，无 Kivy） |
 | **Linux 构建** | ✅ **CI 全绿**（含冻结产物端到端测试） |
 | **Windows 构建** | ✅ **CI 全绿** |

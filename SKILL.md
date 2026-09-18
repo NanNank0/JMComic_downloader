@@ -52,7 +52,7 @@ extra packages — install only what the requested format needs:
 
 | Format | Package |
 |---|---|
-| PDF | `img2pdf` |
+| PDF | `Pillow` |
 | ZIP | `pyzipper` (or `py7zr` for 7z) |
 | long image | `Pillow` |
 

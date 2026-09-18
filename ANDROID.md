@@ -57,28 +57,58 @@ def default_http_backend() -> str:
     return ANDROID_HTTP_BACKEND if is_android() else DEFAULT_HTTP_BACKEND
 ```
 
-### ⚠️ 这条约束会不会被上游打破
+### ⚠️ 更正：curl_cffi 并不是惰性导入，已经在模块顶层了
 
-**会，而且不会有任何提示。** 触发条件是：**未来的 `jmcomic` 版本把 `curl_cffi` 的导入从函数内部移到模块顶层**。那样 `import jmcomic` 就会直接失败。
+本文档早期版本写过「`curl_cffi` 是惰性导入，只要不选它就不会触发」。**这个判断是错的**，
+而且在真机上暴露了出来：装好 APK 后界面能打开，但点下载就报
 
-每次升级 `jmcomic` 后，请验证这一点：
-
-```bash
-python -c "
-import jmcomic  # 不应报 curl_cffi 缺失
-print('版本', jmcomic.__version__)
-print('默认 postman:', jmcomic.JmModuleConfig.DEFAULT_OPTION_DICT['client']['postman']['type'])
-"
+```
+失败：jmcomic is not importable: No module named 'curl_cffi'
 ```
 
-如果报 `ModuleNotFoundError: No module named 'curl_cffi'`，说明上游改了导入位置，此时需要：
-给 `curl_cffi` 写一个 p4a recipe（用 `libcurl` + `openssl` recipe，两个都有），或者锁定一个更早的 `jmcomic` 版本。
+原因是 `jmcomic/__init__.py` 会 eager 地导入异步客户端模块，而那个模块在**模块顶层**
+就 import 了 curl_cffi：
 
-**运行期如何验证**：装好 APK 后跑一次「单章下载」，然后在 logcat 里确认没有 `curl_cffi` 相关报错：
+```python
+# jmcomic/jm_async_client.py 第 12 行（缩进 0，模块级）
+from curl_cffi.requests import AsyncSession
+
+# jmcomic/__init__.py
+from .jm_async_client import AsyncJmApiClient   # ← 于是 import jmcomic 必然需要 curl_cffi
+```
+
+我当初只检查了 `common/` 包（那里确实是惰性的），漏了 `jm_async_client.py`。
+
+**现在的处理方式**：`jmcore._install_curl_cffi_stub()` 在 curl_cffi 缺失时往
+`sys.modules` 注册一个**桩模块**，只提供 `curl_cffi.requests.AsyncSession`，
+让 `import jmcomic` 能过。之所以可以这样做，是因为那个符号的唯一使用者是**异步客户端**，
+而本应用只用同步 API + `requests` 后端。
+
+桩是「会喊的」而不是「会骗人的」——一旦真被使用就抛明确的错误：
+
+```
+RuntimeError: curl_cffi is not available on this platform (python-for-android cannot
+build it). This build uses the synchronous jmcomic API with the 'requests' HTTP
+backend; the async client is unsupported here.
+```
+
+**升级 `jmcomic` 后要验证**（这条约束仍然可能被上游进一步打破——例如别处也加了模块级导入）：
+
+```bash
+python tests/test_android_optional_deps.py
+```
+
+它会屏蔽 `curl_cffi` / `pyyaml` / `img2pdf` 并模拟 Android 环境，跑一次真实下载 + PDF 导出。
+如果上游新增了别的模块级导入，这个测试会立刻失败。
+
+**运行期如何验证**：装好 APK 后跑一次「单章下载」，然后在 logcat 里确认：
 
 ```bash
 adb logcat -s python:D
 ```
+
+正常情况下会先看到 `[jmcore] curl_cffi unavailable; installed a stub ...`，
+然后下载正常进行。
 
 ---
 
@@ -218,7 +248,8 @@ WebView 加载的是固定地址 `http://127.0.0.1:5000/`，**没有 query strin
 | `requests` 后端能完整下载 | ✅ **已实测**（Windows，16 张图） |
 | 网页界面与控制逻辑 | ✅ **已实测**（本地服务 + API + SSE 端到端） |
 | `jmcore` 无 GUI 依赖 | ✅ **已实测** |
-| 省略 pyyaml 后仍能正常下载 | ✅ **已实测**（`tests/test_no_yaml.py` 屏蔽 yaml 后完成真实下载） |
+| 缺 curl_cffi / pyyaml / img2pdf 仍能下载 | ✅ **已实测**（`tests/test_android_optional_deps.py` 屏蔽三者并模拟 Android，完成真实下载） |
+| 缺 img2pdf 仍能导出 PDF | ✅ **已实测**（同上测试，产出 3.9 MB 的有效 PDF） |
 | p4a recipe 类 API 与基类匹配 | ✅ **已核对源码**（`PythonRecipe`、`_host_recipe.pip`、`ctx.get_python_install_dir`） |
 | p4a `webview` bootstrap 的端口约定 | ✅ **已核对源码**（默认 5000，加载 `http://127.0.0.1:PORT/`） |
 | Android SDK / build-tools 就位 | ✅ **CI 已验证**（`build-tools: 34.0.0 37.0.0`） |
@@ -261,7 +292,7 @@ adb logcat -s python:D          # 看 Python 侧输出
 
 **如果下载失败**，在界面里确认「HTTP 后端」显示 `requests`；再不行就配置代理。
 
-### 整条链路踩过并修好的 6 个障碍
+### 整条链路踩过并修好的 7 个障碍
 
 | # | 现象 | 根因 | 修法 |
 |---|---|---|---|
@@ -271,6 +302,7 @@ adb logcat -s python:D          # 看 Python 侧输出
 | 4 | 构建配置本身 | 界面从 Kivy 换成网页后，Android 侧要用 p4a 的 `webview` bootstrap，而不是 sdl2/kivy | `buildozer.spec` 设 `p4a.bootstrap = webview`，requirements 去掉 kivy、加上 pyjnius |
 | 5 | 端口与 token | WebView 加载的是固定地址 `http://127.0.0.1:5000/`，**没有 query string**，token 无法放 URL 里 | Android 上固定用 5000 端口；token 由服务端**注入页面**（`__TOKEN__` 占位符），API 请求仍带 token |
 | 6 | **APK 能装能开，但界面一直转圈加载** | `webui/` 里只有 `server.py`，**没有 `main.py`**。p4a 的 webview bootstrap 在**构建时跳过** `main.py` 检查（源码注释原文："webview doesn't need an entrypoint, apparently"），但运行时 `PythonActivity` 仍会启动 `main.py` —— 于是没有任何代码去监听 5000 端口 | 新增 `webui/main.py` 作为 Android 入口，绑定 5000 端口并把启动信息打到 logcat |
+| 7 | 界面能开，点下载报 `jmcomic is not importable: No module named 'curl_cffi'` | `jmcomic/jm_async_client.py` 在**模块顶层** `from curl_cffi.requests import AsyncSession`，而 `jmcomic/__init__.py` eager 导入它。curl_cffi 是 Rust 扩展，p4a 无 recipe，Android 上装不了 | `jmcore._install_curl_cffi_stub()` 注册桩模块满足该 import；桩被真正使用时会抛明确错误。详见上文「更正」一节 |
 
 #### 症状：装了能开，但界面一直加载（第 6 条）
 
@@ -322,7 +354,7 @@ WEBVIEW ENTRYPOINT: FAIL
     waits forever on localhost:5000
 ```
 
-`tests/test_no_yaml.py` 则用 import hook 屏蔽 `yaml` 后跑一次真实下载，证明省略它是安全的。
+`tests/test_android_optional_deps.py` 更进一步：它设置 p4a 的环境变量让 `is_android()` 为真，屏蔽 `curl_cffi` / `pyyaml` / `img2pdf` 三个模块，然后跑一次**带 PDF 导出的真实下载**。
 两个测试都接在普通 CI 的 smoke job 里，几秒钟就能跑完，不需要 Android 工具链。
 
 ---
@@ -421,3 +453,21 @@ buildozer -v android debug 2>&1 | tail -n 120
 
 CI 上失败时，.github/workflows/android.yml 的诊断步骤会把 SDK 布局和 p4a 的真实报错
 提取成注解，不需要下载日志。
+
+### PDF 导出为什么不用 img2pdf
+
+`img2pdf` 硬依赖 `pikepdf`（QPDF 的 Python 绑定），而 pikepdf 既没有 android wheel、
+p4a 也没有 recipe，所以在 Android 上**根本装不上**（`--only-binary=:all:` 解析直接失败）。
+
+但 `Pillow` 本来就是我们必需的（图片处理），而 Pillow 自己就能写多页 PDF。
+于是 `jmcore._export_pdf_with_pillow()` 在下载完成后直接把图片合成 PDF：
+
+```python
+first.save(target, "PDF", save_all=True, append_images=rest, resolution=150.0)
+```
+
+好处是**一条代码路径四端通用**：桌面端不再需要 img2pdf，Android 也能导出 PDF，
+`EXPORT_DEPENDENCIES['pdf']` 也从 `img2pdf` 改成了 `PIL`。
+
+界面上的提示相应改成「PDF / 长图 需 Pillow」。这同时消除了你之前看到的
+「缺少导出依赖 img2pdf」提示。

@@ -44,8 +44,14 @@ ANDROID_HTTP_BACKEND = "requests"
 
 # Optional dependencies per export format, used to warn before a download rather
 # than silently producing nothing.
+#
+# `pdf` deliberately depends on PIL (Pillow) rather than img2pdf: img2pdf hard-depends
+# on pikepdf, a QPDF binding with no Android wheel and no python-for-android recipe, so
+# it simply cannot be installed on Android. Pillow is required anyway and can write
+# multi-page PDFs itself, so `_export_pdf_with_pillow` produces the same kind of
+# artifact everywhere. See ANDROID.md.
 EXPORT_DEPENDENCIES: Dict[str, tuple] = {
-    "pdf": ("img2pdf",),
+    "pdf": ("PIL",),
     "zip": (),
     "png": ("PIL",),
 }
@@ -86,8 +92,66 @@ def default_http_backend() -> str:
     return ANDROID_HTTP_BACKEND if is_android() else DEFAULT_HTTP_BACKEND
 
 
+# Set to True when load_jmcomic() had to stub curl_cffi out (see below).
+CURL_CFFI_STUBBED = False
+
+
+def _install_curl_cffi_stub() -> bool:
+    """
+    Make `import jmcomic` work on platforms where curl_cffi cannot exist.
+
+    jmcomic 2.7.7 imports it at MODULE scope:
+
+        jmcomic/jm_async_client.py:  from curl_cffi.requests import AsyncSession
+
+    and `jmcomic/__init__.py` eagerly imports that module, so a plain `import jmcomic`
+    fails with `No module named 'curl_cffi'` when it is absent. curl_cffi is a Rust +
+    CFFI extension and python-for-android has no recipe for it, so on Android it is
+    genuinely unavailable.
+
+    That import only needs `AsyncSession`, whose only consumer is the ASYNC client -
+    which this application never uses: it drives the synchronous API through the
+    `requests` HTTP backend. A stub module is therefore registered in sys.modules to
+    satisfy the import. It raises loudly if it is ever actually used, rather than
+    silently doing the wrong thing.
+
+    Returns True when a stub was installed.
+    """
+    global CURL_CFFI_STUBBED
+
+    import types
+
+    if "curl_cffi" in sys.modules:
+        return False
+    try:
+        import curl_cffi  # noqa: F401
+        return False
+    except Exception:
+        pass
+
+    class _AsyncSessionUnavailable:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                "curl_cffi is not available on this platform (python-for-android "
+                "cannot build it). This build uses the synchronous jmcomic API with "
+                "the 'requests' HTTP backend; the async client is unsupported here."
+            )
+
+    package = types.ModuleType("curl_cffi")
+    requests_module = types.ModuleType("curl_cffi.requests")
+    requests_module.AsyncSession = _AsyncSessionUnavailable
+    requests_module.Session = _AsyncSessionUnavailable
+    package.requests = requests_module
+    sys.modules["curl_cffi"] = package
+    sys.modules["curl_cffi.requests"] = requests_module
+
+    CURL_CFFI_STUBBED = True
+    return True
+
+
 def load_jmcomic():
     """Import jmcomic, or raise a handled error explaining how to install it."""
+    stubbed = _install_curl_cffi_stub()
     try:
         import jmcomic
     except ImportError as e:
@@ -98,6 +162,14 @@ def load_jmcomic():
                 f'"{sys.executable}" -m pip install jmcomic'
             ),
         ) from e
+    if stubbed:
+        # Surface it: on Android this only reaches logcat, which is exactly where a
+        # future "async client unsupported" report would need explaining.
+        try:
+            print("[jmcore] curl_cffi unavailable; installed a stub so jmcomic imports "
+                  "(async client disabled, sync API + requests backend in use)")
+        except Exception:
+            pass
     return jmcomic
 
 
@@ -406,12 +478,89 @@ def missing_export_dependencies(exports: Iterable[str]) -> List[str]:
 
 
 def build_feature(jmcomic, exports: Sequence[str]):
-    """Compose the jmcomic Feature chain for the requested export formats."""
+    """
+    Compose the jmcomic Feature chain for the export formats jmcomic should handle.
+
+    `pdf` is NOT delegated to jmcomic: its PDF feature needs img2pdf, which cannot be
+    installed on Android (pikepdf has no android wheel). PDF is produced by
+    `_export_pdf_with_pillow` after the download instead.
+    """
     extra = None
     for suffix in exports:
+        if suffix == "pdf":
+            continue
         feature = getattr(jmcomic.Feature, EXPORT_KINDS[suffix][0])
         extra = feature if extra is None else (extra + feature)
     return extra
+
+
+def _safe_filename(text: str, fallback: str) -> str:
+    """Make `text` usable as a filename on every platform we ship to."""
+    cleaned = re.sub(r'[\\/:*?"<>|\r\n\t]+', "_", str(text or "")).strip(" .")
+    return cleaned[:120] or fallback
+
+
+def _export_pdf_with_pillow(image_paths: Sequence[str], output_dir: Path,
+                            album_id: str, title: str,
+                            progress_sink=None) -> str:
+    """
+    Write one multi-page PDF from the downloaded images, using Pillow only.
+
+    Why not img2pdf: it hard-depends on `pikepdf`, a QPDF binding that has neither an
+    android wheel nor a python-for-android recipe, so the Android build cannot install
+    it. Pillow is already required for image handling and can write multi-page PDFs,
+    which keeps PDF export working on every platform from one code path.
+
+    Returns the PDF path.
+    """
+    try:
+        from PIL import Image
+    except ImportError as e:  # pragma: no cover - dependency is declared
+        raise OperationError(
+            "PDF export needs Pillow, which is not installed",
+            hint="pip install Pillow",
+        ) from e
+
+    pages = [Path(p) for p in image_paths if Path(p).is_file()]
+    if not pages:
+        raise OperationError(
+            "no downloaded images to build a PDF from",
+            hint="The download may have produced no images for this id.",
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    target = output_dir / f"{_safe_filename(f'[JM{album_id}]{title}', f'JM{album_id}')}.pdf"
+
+    opened = []
+    try:
+        for path in pages:
+            image = Image.open(path)
+            # PDF cannot carry alpha/16-bit/palette pages directly.
+            if image.mode in ("RGBA", "LA", "P", "PA"):
+                image = image.convert("RGB")
+            elif image.mode not in ("RGB", "L", "1"):
+                image = image.convert("RGB")
+            opened.append(image)
+
+        first, rest = opened[0], opened[1:]
+        save_kwargs = {"resolution": 150.0}
+        if rest:
+            first.save(target, "PDF", save_all=True, append_images=rest, **save_kwargs)
+        else:
+            first.save(target, "PDF", **save_kwargs)
+    finally:
+        for image in opened:
+            try:
+                image.close()
+            except Exception:
+                pass
+
+    if progress_sink:
+        try:
+            progress_sink(f"PDF 已导出（Pillow，{len(opened)} 页）: {target}")
+        except Exception:
+            pass
+    return str(target)
 
 
 def run_download(settings: DownloadSettings, jmcomic=None,
@@ -509,6 +658,29 @@ def run_download(settings: DownloadSettings, jmcomic=None,
     payload["kind"] = settings.kind
     payload["requested"] = parsed
     payload["saveDir"] = str(base_dir)
+
+    # PDF is produced here rather than through jmcomic's feature, because that feature
+    # needs img2pdf (-> pikepdf), which is not installable on Android.
+    if "pdf" in settings.exports:
+        try:
+            jobs_list = payload.get("results", [payload]) if "results" in payload else [payload]
+            for job in jobs_list:
+                images = job.get("imageFiles") or []
+                if not images:
+                    note(f"[提示] JM{job.get('id')} 没有图片，跳过 PDF 导出")
+                    continue
+                pdf_path = _export_pdf_with_pillow(
+                    images, base_dir, str(job.get("id") or ""),
+                    str(job.get("title") or ""), progress_sink=note,
+                )
+                job.setdefault("exportFiles", [])
+                if pdf_path not in job["exportFiles"]:
+                    job["exportFiles"].append(pdf_path)
+        except OperationError as e:
+            note(f"[提示] PDF 导出失败：{e.message}")
+        except Exception as e:
+            note(f"[提示] PDF 导出失败：{type(e).__name__}: {e}")
+
     return payload
 
 

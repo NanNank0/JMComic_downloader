@@ -76,7 +76,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <label><input type="checkbox" id="exp_pdf" checked> PDF</label>
       <label><input type="checkbox" id="exp_zip"> ZIP</label>
       <label><input type="checkbox" id="exp_png"> 长图</label>
-      <span class="muted" style="font-size:12.5px">PDF 需 img2pdf，长图需 Pillow</span>
+      <span class="muted" style="font-size:12.5px">PDF / 长图 需 Pillow</span>
     </div>
   </div>
 

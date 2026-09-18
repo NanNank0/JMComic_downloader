@@ -16,7 +16,7 @@ Contract:
 
 Upstream project: https://github.com/hect0x7/JMComic-Crawler-Python
 Requires: python >= 3.9 and `pip install jmcomic`
-Optional extra deps for exports: `pip install "jmcomic[plugins]" img2pdf`
+Optional extra deps for exports: `pip install Pillow` (PDF / long image)
 """
 
 from __future__ import annotations

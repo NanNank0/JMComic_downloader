@@ -133,7 +133,7 @@ python scripts/jmctl.py download 438696 --export pdf  # 下载 + 导出 PDF
 
 ```powershell
 python -m pip install jmcomic
-python -m pip install img2pdf Pillow        # 可选：PDF / 长图导出
+python -m pip install Pillow                # 可选：PDF / 长图导出
 
 python scripts/jmctl.py doctor              # 检查环境
 python webui/server.py                      # 启动界面
@@ -306,7 +306,7 @@ JMComic_downloader/
 | `could not parse a JM id` | 车号不是纯数字。先从文本里把数字提取出来 |
 | `本子/章节不存在` | 号码错了，或者该本子需要登录才能看。先确认号码 |
 | `networkOk: false` | 换 `--client-impl`（api ↔ html），或换 HTTP 后端 / 配置代理 |
-| 下载成功但没有导出文件 | 对应依赖没装（PDF→`img2pdf`，长图→`Pillow`），或该作品没产出图片 |
+| 下载成功但没有导出文件 | 对应依赖没装（PDF / 长图 都需要 `Pillow`），或该作品没产出图片 |
 | `partial download failure` | 重跑同一条命令即可续传，已下载的会跳过 |
 | 端口被占用 | 换一个：`python webui/server.py --port 8765` |
 | 中文显示成乱码 | 控制台编码问题。加 `$env:PYTHONIOENCODING='utf-8'` |
