@@ -785,7 +785,9 @@ def doctor_report(probe_album_id: Optional[str] = None,
     }
 
     deps = {}
-    for module in ("img2pdf", "PIL", "pyzipper", "py7zr", "psutil",
+    # img2pdf is intentionally absent: PDF export no longer uses it (it depends on
+    # pikepdf, which cannot be installed on Android), so reporting it would be noise.
+    for module in ("PIL", "pyzipper", "py7zr", "psutil",
                    "requests", "curl_cffi", "kivy"):
         try:
             __import__(module)

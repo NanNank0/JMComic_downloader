@@ -73,23 +73,24 @@ jobs:
           key: buildozer-global-${{ hashFiles('buildozer.spec') }}
           restore-keys: buildozer-global-
 
-      # NOTE: no `restore-keys` here, deliberately.
+      # The `-v2` suffix escapes a POISONED cache; it is not cosmetic.
       #
-      # p4a bakes spec-derived values (versionName, permissions, app name) into the
-      # generated Android project during `p4a create`, and buildozer reuses an existing
-      # dist instead of re-running create. With a `restore-keys` fallback, a changed
-      # buildozer.spec still restores the OLD .buildozer, so those changes are silently
-      # ignored - observed for real: version 1.1.0 in the spec, versionName 1.0.0 in the
-      # shipped APK manifest. (Source files ARE re-packaged, which is why a fix to
-      # webui/ still lands.)
+      # History: with a `restore-keys` fallback, the first run under a given spec hash
+      # restored an older `.buildozer` and then SAVED that stale state under the new
+      # hash. Every later run with the same hash restored it again, so `p4a create` was
+      # skipped and spec-derived values (versionName, permissions, app name) stayed at
+      # their original values - while app source files were still re-packaged, which is
+      # why code fixes landed but `version = 1.1.0` never showed up (the shipped APK
+      # manifest still said 1.0.0).
       #
-      # Dropping the fallback means a spec change forces a fresh, correct build. That
-      # costs a full rebuild, but spec changes are rare and correctness wins.
+      # NOTE: no `restore-keys` here, deliberately - that fallback is what let a
+      # near-miss cache satisfy a changed spec in the first place. Bump the suffix
+      # again if you ever need to be certain the Android project is regenerated.
       - name: Cache buildozer project directory
         uses: actions/cache@v4
         with:
           path: .buildozer
-          key: buildozer-project-${{ hashFiles('buildozer.spec', 'recipes/**') }}
+          key: buildozer-project-v2-${{ hashFiles('buildozer.spec', 'recipes/**') }}
 
       # `buildozer android debug` lets Gradle sign with ~/.android/debug.keystore.
       # A fresh runner generates a NEW random key, so APKs from different runs have
