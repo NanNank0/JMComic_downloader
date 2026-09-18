@@ -61,6 +61,11 @@ try:
     # module, which needs the Activity's ClassLoader - available here, but not on the
     # worker thread that performs downloads. See the function's docstring.
     print(f"[jmcomic] ctypes.util: {jmcore.ensure_ctypes_util_importable()}", flush=True)
+
+    # JM serves its page images as .webp, and on Android Pillow's WebP codec only
+    # exists if the build included the `libwebp` recipe (see buildozer.spec). Without
+    # it every download "succeeds" and then fails to decode, so print the truth here.
+    print(f"[jmcomic] {jmcore.pillow_codecs()}", flush=True)
 except Exception:
     # Not fatal for serving the UI, but worth seeing in logcat.
     print("[jmcomic] WARNING: jmcore probe failed", flush=True)

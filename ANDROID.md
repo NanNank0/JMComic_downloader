@@ -236,6 +236,8 @@ WebView 加载的是固定地址 `http://127.0.0.1:5000/`，**没有 query strin
 | 构建卡在下载 SDK/NDK | 正常，首次要很久。CI 里有缓存 |
 | `buildozer` 报 Java 版本错 | 需要 **JDK 17**，不是 8 也不是 21 |
 | APK 装了但下载失败 | 检查是否走了 `curl_cffi` 后端。网页界面里「HTTP 后端」应显示 `requests` |
+| 图片**全部**下载失败，异常是 `cannot identify image file` | Pillow 缺 WebP 编解码器（构建期决定）。见「七、Pillow 的 WebP 编解码器」。`adb logcat -s python:D` 里的 `[jmcomic] Pillow ... webp=NO` 可直接确认 |
+| 日志里 50 张图全部 `图片准备下载` 成功、却全部 `图片下载失败` | 同上：HTTP 是成功的，失败在解码。网络/代理/后端都不是原因 |
 
 ---
 
@@ -255,8 +257,9 @@ WebView 加载的是固定地址 `http://127.0.0.1:5000/`，**没有 query strin
 | Android SDK / build-tools 就位 | ✅ **CI 已验证**（`build-tools: 34.0.0 37.0.0`） |
 | p4a 与新版 pip 不兼容 | ✅ **CI 已验证**（`BuildDependencyInstallError` 消失） |
 | 依赖解析（`Auto module resolution`） | ✅ **CI 已验证**（去掉 pyyaml 后通过） |
+| APK 内含 Pillow 的 WebP 编解码器 | ✅ **CI 已验证**（`gui/verify_apk.py` 直接读 APK，断言 `PIL/_webp*.so` 存在且所有原生依赖可解析） |
 | **APK 构建成功** | ✅ **CI 已产出** |
-| **APK 在真机运行** | ❌ **未实测** —— 开发机为 Windows，无法安装验证 |
+| **APK 在真机运行** | ⚠️ **部分实测（用户真机 v1.3.7）**：App 启动、内置 WebView 界面、本子信息/章节/图片地址全部正常，50 张图的 HTTP 请求全部成功；但**解码 100% 失败**（缺 WebP 编解码器）。该问题已修，见「七」——**修复后的包仍待真机复测** |
 
 ### APK 产出的证据
 
@@ -292,7 +295,7 @@ adb logcat -s python:D          # 看 Python 侧输出
 
 **如果下载失败**，在界面里确认「HTTP 后端」显示 `requests`；再不行就配置代理。
 
-### 整条链路踩过并修好的 7 个障碍
+### 整条链路踩过并修好的 8 个障碍
 
 | # | 现象 | 根因 | 修法 |
 |---|---|---|---|
@@ -303,6 +306,7 @@ adb logcat -s python:D          # 看 Python 侧输出
 | 5 | 端口与 token | WebView 加载的是固定地址 `http://127.0.0.1:5000/`，**没有 query string**，token 无法放 URL 里 | Android 上固定用 5000 端口；token 由服务端**注入页面**（`__TOKEN__` 占位符），API 请求仍带 token |
 | 6 | **APK 能装能开，但界面一直转圈加载** | `webui/` 里只有 `server.py`，**没有 `main.py`**。p4a 的 webview bootstrap 在**构建时跳过** `main.py` 检查（源码注释原文："webview doesn't need an entrypoint, apparently"），但运行时 `PythonActivity` 仍会启动 `main.py` —— 于是没有任何代码去监听 5000 端口 | 新增 `webui/main.py` 作为 Android 入口，绑定 5000 端口并把启动信息打到 logcat |
 | 7 | 界面能开，点下载报 `jmcomic is not importable: No module named 'curl_cffi'` | `jmcomic/jm_async_client.py` 在**模块顶层** `from curl_cffi.requests import AsyncSession`，而 `jmcomic/__init__.py` eager 导入它。curl_cffi 是 Rust 扩展，p4a 无 recipe，Android 上装不了 | `jmcore._install_curl_cffi_stub()` 注册桩模块满足该 import；桩被真正使用时会抛明确错误。详见上文「更正」一节 |
+| 8 | 真机上本子信息、章节、50 张图的 HTTP 请求**全部成功**，但 **50 张图全部解码失败**：`cannot identify image file` | Android 的 Pillow 缺 WebP 编解码器：p4a 的 Pillow recipe 把 `libwebp` 放在 `opt_depends`，只有它出现在构建顺序里才会编译 `_webp` 扩展。JM 的图恰好是 `.webp`（详见「七」） | `buildozer.spec` 的 requirements 加上 `libwebp`；并加 `gui/verify_apk.py` 在 CI 上直接读 APK 断言 `PIL/_webp*.so` 存在 |
 
 #### 症状：装了能开，但界面一直加载（第 6 条）
 
@@ -356,6 +360,114 @@ WEBVIEW ENTRYPOINT: FAIL
 
 `tests/test_android_optional_deps.py` 更进一步：它设置 p4a 的环境变量让 `is_android()` 为真，屏蔽 `curl_cffi` / `pyyaml` / `img2pdf` 三个模块，然后跑一次**带 PDF 导出的真实下载**。
 两个测试都接在普通 CI 的 smoke job 里，几秒钟就能跑完，不需要 Android 工具链。
+
+---
+
+## 七、Pillow 的 WebP 编解码器（v1.3.7 真机「50 张图全部失败」的根因）
+
+### 症状
+
+真机 v1.3.7：车号能正常解析，本子信息、章节、每一张图的下载地址都拿到了，HTTP 全部成功，
+但**每一张图**都在保存时失败：
+
+```
+图片准备下载: 350234/00001.webp [1/25], [https://cdn-msp3.jmapiproxy2.cc/.../00001.webp] → [...]
+图片下载失败: [https://cdn-msp3.jmapiproxy2.cc/media/photos/350234/00017.webp],
+异常: [cannot identify image file <_io.BytesIO object at 0x...>]
+...
+JmDownloader Exit with exception: (<class 'jmcomic.jm_exception.PartialDownloadFailedException'>,
+"部分下载失败 共50个图片下载失败: ...")
+```
+
+`50/50` 全部失败，而**同一个本子在 Windows 上完全正常**。这条对比就是最大线索：
+失败发生在 Pillow 解码那一层，不是网络、代理、后端或 cookie。
+
+### 根因
+
+jmcomic 保存图片走的是
+`JmImageResp.transfer_to()` → `JmImageTool.open_image(resp.content)`
+→ 解密（把图切成 N 条横向条再重排）→ `img.save(path)`。
+JM 的图是 **WebP**，所以整条链路要求 Pillow 具备 WebP 编解码器。
+
+而 Android 上 Pillow 支持哪些格式，是**构建期**决定的。p4a 的 Pillow recipe 把 webp
+列为**可选依赖**（源码原文）：
+
+```python
+# pythonforandroid/recipes/Pillow/__init__.py
+depends = ['png', 'jpeg', 'freetype']
+hostpython_prerequisites = ["setuptools>=77"]
+opt_depends = ['libwebp']
+...
+if 'libwebp' in self.ctx.recipe_build_order:
+    webp = self.get_recipe('libwebp', self.ctx)
+    webp_install = join(webp.get_build_dir(arch.arch), 'installation')
+    env["WEBP_ROOT"] = f"{join(webp_install, 'lib')}:{join(webp_install, 'include')}"
+```
+
+我们当时没把 `libwebp` 放进 `requirements` → libwebp 不会被构建 → `WEBP_ROOT` 不会设置
+→ Pillow 的 `setup.py` 直接跳过 `_webp` 扩展。
+
+### 证据（直接查 v1.3.7 的 APK，不是推测）
+
+```bash
+# 1) APK 里根本没有 libwebp.so
+unzip -l jm-v137.apk | grep -i webp            # 无输出
+
+# 2) Python 包里有纯 Python 的 PIL/WebPImagePlugin，但没有 _webp 扩展
+unzip -p jm-v137.apk lib/arm64-v8a/libpybundle.so | gunzip | tar -t | grep 'PIL/.*\.so'
+# _python_bundle/site-packages/PIL/_imaging.so
+# _python_bundle/site-packages/PIL/_imagingft.so
+# _python_bundle/site-packages/PIL/_imagingmath.so
+# ...（没有 _webp.so）
+```
+
+`WebPImagePlugin.py` 是纯 Python，永远都在；但它 `from . import _webp`。扩展不存在时
+`Image.open()` 对任何 WebP 数据都抛
+`UnidentifiedImageError: cannot identify image file`——与真机日志逐字吻合。
+
+### 修法（一行）
+
+```diff
+- requirements = python3,pyjnius,requests,commonx,pillow,pycryptodome,jmcomic
++ requirements = python3,libwebp,pyjnius,requests,commonx,pillow,pycryptodome,jmcomic
+```
+
+为什么这就够——p4a 的依赖图在展开依赖时，会把 `opt_depends` 里**已经在需求列表中**的项
+当成真实依赖边（`pythonforandroid/graph.py`）：
+
+```python
+# handle opt_depends: these impose requirements on the build
+# order only if already present in the list of recipes to build
+dependencies.extend(fix_deplist(
+    [[d] for d in recipe.get_opt_depends_in_list(all_inputs)
+     if d.lower() not in blacklist]
+))
+```
+
+所以写上 `libwebp` 会同时得到两件事：它**排在 Pillow 之前**构建，且
+`'libwebp' in ctx.recipe_build_order` 为真 → `WEBP_ROOT` 被设置 → Pillow 编译出 `_webp`。
+
+### 一个容易踩的坑：soname
+
+Android 上 CMake 会设置 `CMAKE_PLATFORM_NO_VERSIONED_SONAME`（CMake 的
+`Modules/Platform/Android.cmake` 里写着 "Conventionally Android does not use versioned
+soname"），所以 `libwebp` 虽然声明了 `SOVERSION 8.0.1`，构建出来仍然是不带版本号的
+`libwebp.so`。这点很关键：Android 的 linker 按**精确文件名**匹配 `DT_NEEDED`，而 AGP
+只打包以 `.so` 结尾的文件——真要是生成了 `libwebp.so.7`，`PIL/_webp.so` 会在**运行时**
+加载失败（构建期毫无提示）。现有 APK 里的 `libjpeg.so` / `libpng16.so` 同样不带版本号，
+可作旁证。`gui/verify_apk.py` 会检查每个 `DT_NEEDED` 是否有对应文件，正是为了守住这条。
+
+### 防止复发
+
+- **`gui/verify_apk.py`**（新增）：直接读 APK，对每个 ABI 断言
+  1）Python 包里存在 `PIL/_webp*.so`；2）所有原生对象（`lib/<abi>/*.so` 与包内扩展模块）
+  的每个 `DT_NEEDED` 都能解析。把 v1.3.7 的包喂给它，它会明确报 FAIL——这正是期望行为。
+  本地也能跑：`python gui/verify_apk.py bin/*.apk`。
+- **CI**：`android` workflow 在构建之后、上传之前运行它，坏包不会再被发布。
+- **`tests/test_android_requirements.py`**：新增 `libwebp` 必须留在 requirements 的检查。
+- **真机可查**：启动时 logcat 会多打一行
+  `[jmcomic] Pillow 11.3.0 webp=yes jpg=yes zlib=yes ...`，
+  以后遇到解码类问题，一行就能定位。
 
 ---
 

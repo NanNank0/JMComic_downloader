@@ -614,6 +614,36 @@ class DownloadSettings:
     image_suffix: Optional[str] = None
 
 
+def pillow_codecs() -> str:
+    """
+    One-line report of the image codecs the installed Pillow can actually use.
+
+    Why this is worth a startup log line: on Android this is a BUILD-time property,
+    not a runtime one. p4a's Pillow recipe compiles the WebP codec only when
+    `libwebp` is in the recipe build order (see buildozer.spec), and JM serves its
+    page images as .webp. A build without it downloads every image successfully and
+    then fails to decode all of them:
+
+        PIL.UnidentifiedImageError: cannot identify image file <_io.BytesIO ...>
+
+    which the UI reports only as "共 N 个图片下载失败". Printing the codec table at
+    startup makes that a five-second diagnosis from `adb logcat -s python:D`.
+    """
+    try:
+        import PIL
+        from PIL import features
+    except Exception as exc:  # pragma: no cover - Pillow is a hard dependency
+        return f"unavailable ({exc})"
+
+    parts = []
+    for name in ("webp", "jpg", "zlib", "libtiff", "freetype2"):
+        try:
+            parts.append(f"{name}={'yes' if features.check(name) else 'NO'}")
+        except Exception:
+            parts.append(f"{name}=?")
+    return f"Pillow {getattr(PIL, '__version__', '?')} " + " ".join(parts)
+
+
 def missing_export_dependencies(exports: Iterable[str]) -> List[str]:
     """Names of absent optional modules needed by the requested export formats."""
     missing: List[str] = []

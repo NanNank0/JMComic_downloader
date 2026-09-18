@@ -53,9 +53,16 @@ RECIPE_PROVIDED = {
     "python3",
     "pyjnius",       # webview bootstrap needs it; p4a has a recipe
     "pillow",
+    "libwebp",       # NOT a PyPI package here: p4a's recipe, see check_webp_codec()
     "pycryptodome",
     "jmcomic",       # our own recipe in recipes/jmcomic/
 }
+
+# Pillow only compiles its WebP codec when `libwebp` is part of the p4a recipe build
+# order (p4a's Pillow recipe declares it in `opt_depends` and then sets WEBP_ROOT).
+# Without it, every .webp page image downloads fine and fails to decode with
+# `PIL.UnidentifiedImageError`, so this is a hard requirement, not an optimisation.
+REQUIRED_FOR_PILLOW = ("libwebp",)
 
 # Tags p4a would use for `android.archs = arm64-v8a, armeabi-v7a` at ndk_api 24.
 # See PyProjectRecipe.get_wheel_platform_tags().
@@ -128,12 +135,48 @@ def check_webview_entrypoint() -> list:
     return problems
 
 
+def check_webp_codec(requirements: list) -> list:
+    """
+    `libwebp` must stay in buildozer.spec requirements.
+
+    It is not a PyPI package and nothing imports it, so it looks like dead weight - but
+    p4a's Pillow recipe declares it in `opt_depends` and only enables the WebP codec
+    when it is part of the recipe build order. JM serves its page images as .webp, so
+    dropping it makes every image fail to decode AFTER a successful download:
+
+        PIL.UnidentifiedImageError: cannot identify image file <_io.BytesIO ...>
+
+    Returns a list of problems (empty when fine).
+    """
+    missing = [name for name in REQUIRED_FOR_PILLOW if name not in requirements]
+    if not missing:
+        return []
+    return [
+        "buildozer.spec `requirements` is missing " + ", ".join(missing) +
+        " - Pillow would then be compiled without its WebP codec and every .webp "
+        "page image would fail with PIL.UnidentifiedImageError "
+        "(see ANDROID.md and gui/verify_apk.py)"
+    ]
+
+
 def main() -> int:
     requirements = parse_requirements()
     depends = parse_recipe_depends()
 
     print(f"buildozer.spec requirements : {requirements}")
     print(f"recipes/jmcomic depends     : {depends}")
+
+    codec_problems = check_webp_codec(requirements)
+    if codec_problems:
+        print()
+        print("PILLOW WEBP CODEC: FAIL")
+        for problem in codec_problems:
+            print(f"  - {problem}")
+        print()
+        print("JM 的图片是 .webp，而 Pillow 只有在 p4a 的构建顺序里有 libwebp 时才会编译")
+        print("WebP 编解码器：缺了它图片能下载成功但一张都解不开（UnidentifiedImageError）。")
+        return 1
+    print("Pillow webp codec (libwebp) : OK")
 
     entry_problems = check_webview_entrypoint()
     if entry_problems:

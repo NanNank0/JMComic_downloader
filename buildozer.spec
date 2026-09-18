@@ -58,7 +58,33 @@ version = 1.1.0
 # If YAML ever becomes genuinely required on Android, add a recipes/pyyaml/ that builds
 # PyYAML's pure-Python fallback (its setup.py skips the C extension when libyaml is
 # absent), or switch the call sites to ruamel.yaml, for which p4a HAS a recipe.
-requirements = python3,pyjnius,requests,commonx,pillow,pycryptodome,jmcomic
+#
+# libwebp is NOT optional here, despite the name: it is what makes Pillow's WebP
+# codec exist on Android, and JM serves its page images as .webp.
+#
+# v1.3.7 shipped without it. The APK contained PIL/WebPImagePlugin.pyc (pure Python,
+# always present) but no PIL/_webp.so, so Pillow could neither decode nor encode WebP
+# and EVERY image failed after a successful HTTP download:
+#
+#     PIL.UnidentifiedImageError: cannot identify image file <_io.BytesIO object ...>
+#     -> PartialDownloadFailedException: 部分下载失败 共50个图片下载失败
+#
+# while the same album downloaded fine on Windows (whose Pillow wheel bundles WebP).
+# Verified against the artifact: `tar -tzf` of lib/arm64-v8a/libpybundle.so lists
+# PIL/_imaging.so but no _webp*, and the APK has no libwebp.so.
+#
+# p4a's Pillow recipe treats webp as an OPTIONAL dependency:
+#
+#     opt_depends = ['libwebp']
+#     if 'libwebp' in self.ctx.recipe_build_order:
+#         env["WEBP_ROOT"] = "<libwebp build dir>/installation/{lib,include}"
+#
+# and p4a's dependency graph (pythonforandroid/graph.py) turns an opt_depend that IS
+# in the requirements into a real dependency edge, so listing it here both orders
+# libwebp BEFORE Pillow and enables WEBP_ROOT. That is the entire fix.
+#
+# Do not remove it: gui/verify_apk.py fails the build when PIL/_webp*.so is missing.
+requirements = python3,libwebp,pyjnius,requests,commonx,pillow,pycryptodome,jmcomic
 
 p4a.bootstrap = webview
 

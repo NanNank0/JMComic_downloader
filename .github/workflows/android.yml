@@ -180,6 +180,15 @@ jobs:
           echo "$P4A_RELEASE_KEYSTORE" | base64 -d > release.keystore
           buildozer android release
 
+      - name: Verify the APK contents
+        # A green build is not the same as a usable app. v1.3.7 built, installed and
+        # ran, and then failed EVERY image, because Pillow had been compiled without
+        # its WebP codec (`PIL/_webp*.so`) while JM serves page images as .webp.
+        # Nothing in the build log hinted at it, and it only showed up on a phone.
+        # This check reads the artifact itself, so the same class of bug fails here.
+        run: |
+          python gui/verify_apk.py bin/*.apk
+
       - name: Show buildozer log on failure
         if: failure()
         run: |
