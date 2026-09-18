@@ -471,3 +471,44 @@ first.save(target, "PDF", save_all=True, append_images=rest, resolution=150.0)
 
 界面上的提示相应改成「PDF / 长图 需 Pillow」。这同时消除了你之前看到的
 「缺少导出依赖 img2pdf」提示。
+
+### 未解决（仅影响版本号显示）：APK 的 versionName 一直是 1.0.0
+
+`buildozer.spec` 里写的是 `version = 1.1.0`，`configparser` 读出来也是 `1.1.0`，
+但打出来的 APK：
+
+* 文件名是 `jmcomicdownloader-1.0.0-...apk`
+* `AndroidManifest.xml` 里 `android:versionName="1.0.0"`
+
+**这只是版本号显示问题，功能不受影响** —— 我用 `assets/private.tar` 验证过，
+APK 里的 `main.pyc` / `jmcore.pyc` 都是当前代码（含 curl_cffi 桩与 Pillow PDF 导出）。
+
+**一个错误的诊断，已更正。** 我一度以为这是 CI 缓存污染：第一次构建带着
+`restore-keys` 还原了旧 `.buildozer`，又把陈旧状态存到了新 hash 下，导致
+`p4a create` 一直被跳过。但把缓存 key 换成全新的 `-v2` 强制干净构建后，
+**manifest 依然写 1.0.0** —— 所以这个解释是错的，缓存不是原因。
+
+**已确认的事实：**
+
+* p4a 的模板是 `android:versionName="{{ args.version }}"`，渲染发生在生成 Android
+  工程的那一步；
+* p4a 的 bootstrap 构建脚本里 `--version` 声明为 `required=True`；
+* 但 CI 日志里 buildozer 调用的 `create` 命令**没有** `--version`（有 `--dist_name`、
+  `--bootstrap`、`--requirements`、`--copy-libs`、`--ndk-api` 等）；
+* buildozer 的 `get_version()` 确实会返回 `app.version`，并且 `--version` 只出现在
+  它构造 `apk` 命令的地方。
+
+**没能查清的是**哪一步把 `args.version` 落成了 1.0.0（`required=True` 与实际命令
+不含 `--version` 这两点互相矛盾，说明我对命令来源的理解还不完整）。
+
+**可能的绕过**（未验证）：用 buildozer 的透传参数把版本也交给 create：
+
+```ini
+p4a.extra_args = --version=1.1.0
+```
+
+注意 `p4a.extra_args` 会同时拼到 `create` 和 `apk` 命令上，而 `apk` 那条本身已经带了
+`--version`，重复传参的行为需要实测确认。**在验证之前不要把它写进仓库**。
+
+如果哪天需要真正修掉，建议直接看 `buildozer android debug -v` 的完整命令列表，
+确认 `create` 到底有没有拿到版本、以及 manifest 是在哪一步被渲染的。
