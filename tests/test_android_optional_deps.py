@@ -57,6 +57,66 @@ class BlockModules(importlib.abc.MetaPathFinder):
         return None
 
 
+def check_detection_without_platform() -> bool:
+    """
+    Android detection must not go through the `platform` module.
+
+    On Android, `platform.platform()` reaches CPython's `platform.android_ver()`, which
+    resolves classes via pyjnius. pyjnius looks up the app ClassLoader through
+    `org.kivy.android.PythonActivity`; before the activity is ready that falls back to
+    the system loader and raises:
+
+        JavaException: ClassNotFoundException:
+        Didn't find class "org.kivy.android.PythonActivity"
+        on path: DexPathList[[directory "."], ...]
+
+    This is not hypothetical - it was observed on a real device. The trigger was that
+    the *webview* bootstrap (unlike qt/sdl2/sdl3/service_only) does not set
+    ANDROID_ARGUMENT/ANDROID_PRIVATE, so detection fell through to platform.platform().
+
+    Here we remove the ANDROID_* variables, leave only p4a's own env-file marker, and
+    fail if platform.platform() is called.
+    """
+    print()
+    print("-- detection must not use the platform module --")
+
+    saved = {k: os.environ.pop(k, None)
+             for k in ("ANDROID_ARGUMENT", "ANDROID_PRIVATE", "ANDROID_APP_PATH")}
+    had_minsdk = os.environ.get("P4A_MINSDK")
+    os.environ["P4A_MINSDK"] = "24"
+    try:
+        import platform
+
+        import jmcore
+
+        calls = []
+        original = platform.platform
+        platform.platform = lambda *a, **k: (calls.append(1), original(*a, **k))[1]
+        try:
+            detected = jmcore.is_android()
+        finally:
+            platform.platform = original
+
+        print(f"   only P4A_MINSDK set -> is_android()={detected}")
+        if not detected:
+            print("   FAIL: p4a's own env marker did not identify Android")
+            return False
+        if calls:
+            print(f"   FAIL: platform.platform() was called {len(calls)} time(s)")
+            return False
+        print("   platform.platform() was not called  OK")
+        print(f"   signals: {jmcore.android_signals()}")
+        return True
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        if had_minsdk is None:
+            os.environ.pop("P4A_MINSDK", None)
+
+
 def main() -> int:
     # p4a sets these; jmcore.is_android() keys off them.
     private = tempfile.mkdtemp(prefix="jm-android-sim-")
@@ -78,6 +138,8 @@ def main() -> int:
 
     if not jmcore.is_android():
         print("FAIL: is_android() is False, so this does not simulate a device")
+        return 1
+    if not check_detection_without_platform():
         return 1
     print(f"is_android() = True, default backend = {jmcore.default_http_backend()}")
     if jmcore.default_http_backend() != jmcore.ANDROID_HTTP_BACKEND:

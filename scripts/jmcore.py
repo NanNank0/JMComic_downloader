@@ -70,22 +70,59 @@ class OperationError(Exception):
 # environment
 # --------------------------------------------------------------------------- #
 
+def android_signals() -> Dict[str, Any]:
+    """
+    Cheap, JNI-free evidence for whether we are running inside an Android app.
+
+    Deliberately does NOT call `platform.platform()`. On Android that reaches
+    CPython's `platform.android_ver()`, which imports pyjnius and resolves classes
+    through the app's ClassLoader - and pyjnius looks that up via
+    `org.kivy.android.PythonActivity`. When the activity is not ready yet, the lookup
+    falls back to the system loader and blows up with:
+
+        JavaException: java.lang.ClassNotFoundException:
+        Didn't find class "org.kivy.android.PythonActivity"
+        on path: DexPathList[[directory "."], ...]
+
+    (that `directory "."` is the system loader, not the app's). That crash was
+    observed on a real device. The markers below cannot trigger JNI at all.
+    """
+    return {
+        "sys.platform": sys.platform,
+        "has_getandroidapilevel": hasattr(sys, "getandroidapilevel"),
+        "ANDROID_ARGUMENT": bool(os.environ.get("ANDROID_ARGUMENT")),
+        "ANDROID_PRIVATE": bool(os.environ.get("ANDROID_PRIVATE")),
+        "ANDROID_APP_PATH": bool(os.environ.get("ANDROID_APP_PATH")),
+        "P4A_MINSDK": bool(os.environ.get("P4A_MINSDK")),
+        "P4A_IS_WINDOWED": bool(os.environ.get("P4A_IS_WINDOWED")),
+    }
+
+
 def is_android() -> bool:
     """
-    Detect Android without importing anything optional.
+    True when running inside a python-for-android app.
 
-    python-for-android sets ANDROID_ARGUMENT and friends; `platform` may also
-    report 'android' or 'linux' on the same device, so the env vars are the
-    reliable signal.
+    Signals, in order of reliability:
+
+    * `sys.getandroidapilevel` - a builtin CPython only defines on Android builds;
+    * `sys.platform == 'android'`;
+    * `ANDROID_ARGUMENT` / `ANDROID_PRIVATE` / `ANDROID_APP_PATH` - set by p4a's
+      bootstrap. NOTE: the `webview` bootstrap does NOT set these (the qt/sdl2/sdl3/
+      service_only ones do), which is why they cannot be the only signal here;
+    * `P4A_MINSDK` / `P4A_IS_WINDOWED` - written into the APK's `p4a_env_vars.txt`.
+
+    Never probes the platform module; see `android_signals` for why.
     """
-    if os.environ.get("ANDROID_ARGUMENT") or os.environ.get("ANDROID_PRIVATE"):
+    if hasattr(sys, "getandroidapilevel"):
         return True
-    try:
-        import platform
-
-        return "android" in platform.platform().lower()
-    except Exception:
-        return False
+    if sys.platform == "android":
+        return True
+    if os.environ.get("ANDROID_ARGUMENT") or os.environ.get("ANDROID_PRIVATE") \
+            or os.environ.get("ANDROID_APP_PATH"):
+        return True
+    if os.environ.get("P4A_MINSDK") or os.environ.get("P4A_IS_WINDOWED"):
+        return True
+    return False
 
 
 def default_http_backend() -> str:
@@ -322,14 +359,24 @@ def new_client(jmcomic, option):
 
 
 def default_download_dir() -> Path:
-    """A sensible per-platform default download location."""
+    """
+    A sensible per-platform default download location.
+
+    On Android the app's writable root is found from p4a's env vars. The `webview`
+    bootstrap does not set ANDROID_PRIVATE, so fall back to the app directory's parent
+    (the APK's private files dir, which the app owns) rather than to Path.home(), which
+    is not reliably writable on Android.
+    """
     if is_android():
-        # Kivy exposes the app's external files dir here; fall back to home.
         for key in ("ANDROID_PRIVATE", "ANDROID_APP_PATH"):
             base = os.environ.get(key)
             if base:
                 return Path(base) / "downloads"
-        return Path.home() / "downloads"
+        # server.py lives in the app dir (<files>/app), whose parent is writable.
+        try:
+            return Path(__file__).resolve().parent.parent / "downloads"
+        except Exception:
+            return Path(os.getcwd()) / "downloads"
     return Path.home() / "Downloads" / "JMComic"
 
 

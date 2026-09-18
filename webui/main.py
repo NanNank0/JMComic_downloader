@@ -53,6 +53,9 @@ try:
 
     print(f"[jmcomic] android={jmcore.is_android()} "
           f"backend={jmcore.default_http_backend()}", flush=True)
+    # Printed so a device-side failure report shows exactly which signal matched -
+    # the webview bootstrap does not set ANDROID_PRIVATE, unlike the sdl2/qt ones.
+    print(f"[jmcomic] android signals: {jmcore.android_signals()}", flush=True)
     print(f"[jmcomic] default download dir: {jmcore.default_download_dir()}", flush=True)
 except Exception:
     # Not fatal for serving the UI, but worth seeing in logcat.
