@@ -2,10 +2,9 @@
 """
 jmctl - a JSON-first command line wrapper around jmcomic (JMComic-Crawler-Python).
 
-This file is the CLI front end. The actual engine lives in `jmcore.py`, which is
-shared with the tkinter GUI and the Kivy GUI (the latter is what runs on Android,
-Linux and macOS). Keeping the engine out of here is what makes the mobile builds
-possible: a Kivy app has no terminal and no argparse.
+This file is the CLI front end. The actual engine lives in `jmcore.py`, which the
+web UI (`webui/`) and the packaged desktop/Android bundles share. Keeping the engine
+out of here is what lets the same code run where there is no terminal and no argparse.
 
 Contract:
     python jmctl.py <command> [options]

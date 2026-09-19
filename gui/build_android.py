@@ -2,7 +2,7 @@
 """
 Build (or prepare) the Android APK.
 
-buildozer only runs on Linux/macOS, and `source.dir` in buildozer.spec is `gui/`,
+buildozer only runs on Linux/macOS, and `source.dir` in buildozer.spec is `webui/`,
 so the shared engine (`scripts/jmcore.py`) has to be staged next to the app before
 python-for-android collects the sources. This script performs that staging, runs
 buildozer, and always cleans up after itself.
@@ -25,11 +25,6 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-
-# buildozer imports Kivy's build machinery, and Kivy parses sys.argv on import. This
-# script's own switches mean nothing to Kivy, so without this it would print usage
-# and exit 2.
-os.environ.setdefault("KIVY_NO_ARGS", "1")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # buildozer.spec sets source.dir to this directory, so the shared engine has to be
@@ -113,7 +108,7 @@ def main(argv=None) -> int:
 
     if args.action == "logcat":
         require_tool("adb")
-        return run(["adb", "logcat", "-s", "python:D", "SDL:V"])
+        return run(["adb", "logcat", "-s", "python:D"])
 
     if args.action in ("clean",):
         require_tool("buildozer")

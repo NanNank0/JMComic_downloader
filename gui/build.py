@@ -3,9 +3,8 @@
 Package the JMComic downloader for the current platform.
 
 The application is `webui/server.py`: a local web UI served on 127.0.0.1, opened in
-the user's browser. There is deliberately NO native GUI toolkit, because Kivy/SDL2 was
-what made frozen desktop builds fail and macOS CI fragile. With no GUI toolkit,
-freezing is just Python plus jmcomic.
+the user's browser. There is deliberately NO native GUI toolkit, so freezing a build
+means PyInstaller has nothing to do beyond Python plus jmcomic.
 
     python gui/build.py                     # this platform
     python gui/build.py --onedir            # folder instead of one file (faster start)
@@ -32,10 +31,6 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-
-# This script does not import Kivy, but keep the guard for the case where a user still
-# has it installed and a stray import would make Kivy parse this script's argv.
-os.environ.setdefault("KIVY_NO_ARGS", "1")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENTRY = PROJECT_ROOT / "webui" / "server.py"
@@ -139,11 +134,9 @@ def build_args(args) -> list:
         "--exclude-module", "matplotlib",
         "--exclude-module", "pytest",
         "--exclude-module", "IPython",
+        # Stdlib, but PyInstaller can drag tcl/tk in through a dependency; excluding it
+        # keeps the bundle noticeably smaller.
         "--exclude-module", "tkinter",
-        # No GUI toolkit is used any more. Excluding them keeps the bundle small and
-        # avoids pulling a native graphics stack back in.
-        "--exclude-module", "kivy",
-        "--exclude-module", "kivy_deps",
     ]
 
     if args.icon:

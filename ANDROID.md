@@ -153,10 +153,11 @@ buildozer android deploy run logcat
 
 仓库里的 `.github/workflows/android.yml` 会自动构建：
 
-- 推一个 tag（`git tag v1.1.0 && git push origin v1.1.0`）→ 自动构建并把 APK 挂到 Release
+- 推一个 tag（`git tag v1.3.9 && git push origin v1.3.9`）→ 自动构建并把 APK 挂到 Release
 - 或在 GitHub 仓库页面 **Actions** → **android** → **Run workflow**
 
 CI 里做了缓存（`~/.buildozer` 和 `.buildozer`），第二次之后构建只要几分钟。
+注意：改了 `buildozer.spec` 或 `recipes/` 会让项目缓存失效，那一轮是冷构建（约 20 分钟）。
 
 ### 方法 3：任何 Linux 机器或虚拟机
 
@@ -265,18 +266,20 @@ WebView 加载的是固定地址 `http://127.0.0.1:5000/`，**没有 query strin
 
 ### APK 产出的证据
 
-GitHub Actions 的 `android` workflow 在 tag `v1.3.0` 上是全绿的：
+GitHub Actions 的 `android` workflow 每次打 tag 都是全绿的，以 `v1.3.9` 为例：
 
 ```
 [success] Build APK (debug)
+[success] Verify the APK contents      <- gui/verify_apk.py 读 APK 校验
 [success] Upload APK
 [success] Attach APK to the release
 ```
 
-产物：artifact `jmcomic-apk` **32.06 MB**；Release 附件
-`jmcomicdownloader-1.0.0-arm64-v8a_armeabi-v7a-debug.apk` **32.15 MB**。
+产物：artifact `jmcomic-apk`；Release 附件
+`jmcomicdownloader-1.0.0-arm64-v8a_armeabi-v7a-debug.apk` **34.5 MB**
+（`arm64-v8a` + `armeabi-v7a`，含 Pillow 的 WebP 编解码器）。
 
-### 装到手机上怎么验证（需要你做）
+### 装到手机上怎么验证
 
 APK 是 **debug 签名**，可以直接装：
 

@@ -221,9 +221,10 @@ custom `option.yml` rather than extending this CLI ad hoc.
 - Downloading is subject to the site's own rate limits. Do not raise `threading.image` above
   50, do not fan out many albums at once, and never loop `download` over a large id list —
   pass the ids to a single `download` invocation so one option and one client are reused.
-- If the user would rather click than read command output, point them at the bundled GUI:
-  `python gui/app.py`, or the packaged `dist/jmcomic-downloader.exe`. Both are front ends
-  over this same engine, so behavior and configuration are identical.
+- If the user would rather click than read command output, point them at the local web UI:
+  `python webui/server.py` (it serves `http://127.0.0.1:<port>/?token=...` and opens the
+  browser), or the packaged `dist/jmcomic-downloader(.exe)` / Android APK. All of them are
+  front ends over this same engine, so behavior and configuration are identical.
 
 ## Troubleshooting
 

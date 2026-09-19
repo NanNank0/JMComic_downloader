@@ -26,10 +26,7 @@ bin/
 
 # Staged by gui/build_android.py into the source dir so the APK contains the shared
 # engine. It is a copy of scripts/jmcore.py and must never be committed.
-gui/jmcore.py
-gui/jmctl.py
 webui/jmcore.py
-webui/jmctl.py
 
 # 本地配置与密钥 —— 绝对不要提交
 option.yml

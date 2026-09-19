@@ -3,9 +3,8 @@
 JMComic downloader - local web UI.
 
 Instead of a native GUI toolkit, this serves a small page on 127.0.0.1 and opens the
-user's browser. That choice removes the entire native graphics stack (Kivy/SDL2) from
-the product, which is what made frozen desktop builds fail and macOS CI fragile: with
-no GUI toolkit, packaging is just Python plus jmcomic.
+user's browser: no native graphics stack to bundle, so freezing a build is just Python
+plus jmcomic, and all four platforms share one interface implementation.
 
 All download work is delegated to `jmcore`, the same engine the CLI and the agent
 skill use.

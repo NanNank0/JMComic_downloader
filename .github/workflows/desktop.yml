@@ -3,9 +3,7 @@ name: desktop
 # Builds Linux and macOS bundles. Neither can be produced from Windows:
 # PyInstaller cannot cross-compile.
 #
-# There is no GUI toolkit in this project any more (the UI is a local web page), so
-# these jobs need no SDL/OpenGL/xvfb and no Kivy - which is exactly what used to make
-# the macOS job fail.
+# The UI is a local web page, so these jobs need no SDL/OpenGL/xvfb and no GUI toolkit.
 on:
   push:
     tags: ['v*']
